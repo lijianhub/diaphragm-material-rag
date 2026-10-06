@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# Test, type-check and lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Generated pipeline artifacts (directories kept via .gitkeep)
+data/chunks/*
+data/index/*
+data/processed/*
+logs/*
+!data/chunks/.gitkeep
+!data/index/.gitkeep
+!data/processed/.gitkeep
+!logs/.gitkeep
+
+# Source documents that are not redistributable
+data/raw/Elgiloy_Havar_Material_Requirements_for_Diaphragm.pdf
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code personal settings (shared settings in .claude/settings.json stay tracked)
+.claude/settings.local.json
+CLAUDE.local.md
