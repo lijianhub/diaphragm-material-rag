@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "diaphragm-material-rag"
+version = "0.1.0"
+description = "An educational RAG project for materials engineering knowledge retrieval"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Diaphragm Material RAG contributors" }]
+license = { text = "MIT" }
+keywords = ["rag", "retrieval", "embeddings", "vector-search", "python"]
+dependencies = [
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

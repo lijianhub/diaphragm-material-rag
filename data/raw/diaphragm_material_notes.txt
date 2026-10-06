@@ -1,0 +1,5 @@
+Diaphragm materials are used in precision forming operations where controlled metal flow is required. The forming process depends on material strength, ductility, corrosion resistance, and fatigue performance.
+
+For Co-Cr-Ni-Mo alloys such as ELGILOY and HAVAR, the balance of hardness and elasticity is critical. These alloys are often selected for diaphragms because they tolerate repeated cyclic loading while maintaining dimensional stability.
+
+Key considerations include forming pressure, blank geometry, springback behavior, and surface condition. A successful diaphragm process minimizes tearing, wrinkling, and excessive thinning while preserving the final part tolerance.
