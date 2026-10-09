@@ -1,2 +1,3 @@
 pytest>=8.0.0
 pypdf>=4.0.0
+# Optional FAISS vector store: pip install faiss-cpu numpy  (or: pip install -e .[faiss])

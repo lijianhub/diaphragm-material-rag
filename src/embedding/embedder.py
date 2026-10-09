@@ -21,6 +21,11 @@ class SimpleEmbedder:
             raise ValueError("dim must be positive")
         self.dim = dim
 
+    @property
+    def name(self) -> str:
+        """Identifies the vector space; an index must be queried with the embedder that built it."""
+        return f"simple-hash-{self.dim}"
+
     def encode(self, text: str) -> List[float]:
         vector = [0.0] * self.dim
         for token in tokenize(text):

@@ -13,7 +13,8 @@ pip install -r requirements.txt               # pytest + pypdf; the only runtime
 pytest -q                                     # full suite
 pytest tests/test_chunking.py -q              # one file
 pytest tests/test_chunking.py::test_name -q   # one test
-python scripts/query.py "How is springback compensated?"   # retrieve + answer over data/raw
+python scripts/index.py [--store faiss] [--rebuild]   # build/sync the persistent index data/raw -> data/index
+python scripts/query.py "How is springback compensated?"   # retrieve + answer from data/index (in-memory fallback)
 python scripts/evaluate.py --k 3 --alpha 0.5  # retrieval metrics; writes evaluation/results.jsonl
 python experiments/01_naive_rag/run.py        # naive demo: whole documents, no chunking or retrieval
 ```
@@ -45,7 +46,8 @@ The pipeline is ingestion → chunking → embedding → retrieval → generatio
 - `retrieval/hybrid.py`: `hybrid_search(query, query_vector, texts, vectors, top_k, alpha)` scores `alpha * cosine + (1 - alpha) * lexical coverage`, both in [0, 1]. The caller embeds the query with the same embedder as the corpus.
 - `retrieval/bm25.py`: `BM25(texts, k1, b, stem_tokens)` with Lucene IDF, which is never negative. `.scores(query)` is unbounded.
 - `retrieval/fusion.py`: `reciprocal_rank_fusion(rankings, k=60, weights)` and `rank_by_score`, which drops zero-score items so that "not retrieved" never gets a rank.
-- `retrieval/index.py`: `SearchIndex.add_documents()` chunks and embeds; `.search()` returns `SearchResult(text, source, start, end, score)`. It ranks by position, so duplicate chunk texts keep their own sources. The lexical side is `lexical="bm25"` (default) or `"coverage"`, with `stem_tokens=True` by default. `fusion="weighted"` (default) max-normalizes BM25 and blends it with cosine by `alpha`; `fusion="rrf"` fuses the two rankings, with `alpha` weighting them (0.5 means equal). BM25 is rebuilt lazily after `add_documents`, because IDF depends on the whole corpus.
+- `vectorstore/`: the `VectorStore` interface (`add`, `delete_document`, `search`, `save`, and `load_store`) with `InMemoryVectorStore` (pure Python, exact, the reference) and `FaissVectorStore` (`IndexIDMap2(IndexFlatIP)`, exact; optional `faiss-cpu` dependency, imported lazily). Stores L2-normalize vectors, so scores are cosines. A new backend (OpenSearch, pgvector) must pass the contract tests in `tests/test_vectorstore.py`, which run against every store kind.
+- `retrieval/index.py`: `SearchIndex(store="memory"|"faiss")`. `sync(documents)` upserts by SHA-256 content hash and deletes missing sources; `save`/`load` write `manifest.json` plus `store/`. `load` refuses an embedder whose `name` differs from the one that built the index. Search asks the store for `dense_candidates` (default 100) neighbours; other chunks get dense score 0. `.search()` returns `SearchResult(text, source, start, end, score, metadata)`. It ranks by position, so duplicate chunk texts keep their own sources. The lexical side is `lexical="bm25"` (default) or `"coverage"`, with `stem_tokens=True` by default. `fusion="weighted"` (default) max-normalizes BM25 and blends it with cosine by `alpha`; `fusion="rrf"` fuses the two rankings, with `alpha` weighting them (0.5 means equal). BM25 is rebuilt lazily after any change, because IDF depends on the whole corpus.
 - `evaluation/`: relevance is judged by **evidence phrases** in `evaluation/ground_truth.jsonl` that must appear verbatim in a retrieved chunk, not by chunk ids, so the ground truth survives chunking changes. The metrics are hit@k, recall@k (over evidence phrases) and MRR, overall and per question `category` (`keyword`, `paraphrase`, `distractor`, `multi`). `tests/test_evaluation.py` checks that every evidence phrase exists in the corpus; when you edit the samples or questions, keep them in sync. When the benchmark saturates, expand it and freeze it **before** implementing the method it will judge, and record results in `docs/11-rag-evaluation.md`.
 - `generation/rag_chain.py`: `RAGPipeline.answer(question, documents)` takes raw strings, does keyword filtering and concatenation (no LLM call yet), and returns `{"answer", "context", "sources"}`. Its `sources` are placeholder `doc_N` labels; real sources come from `SearchResult`.
 
@@ -53,12 +55,14 @@ The pipeline is ingestion → chunking → embedding → retrieval → generatio
 
 Many files exist only as zero-byte placeholders for the planned learning path. Check a file's contents before assuming it implements anything:
 
-- `src/`: `agent/`, `api/`, `query/`, `vectorstore/` (FAISS / pgvector), `generation/claude.py`, `generation/prompt.py`, `ingestion/parser.py`, `config.py`
-- `scripts/` other than `query.py` and `evaluate.py`, `experiments/02_*`–`11_*`, `notebooks/`, `docs/*.md` other than `11-rag-evaluation.md`
+- `src/`: `agent/`, `api/`, `query/`, `vectorstore/pgvector_store.py`, `generation/claude.py`, `generation/prompt.py`, `ingestion/parser.py`, `config.py`
+- `scripts/` other than `index.py`, `query.py` and `evaluate.py`; `experiments/02_*`–`11_*`; `notebooks/`; `docs/*.md` other than `06-vector-database.md` and `11-rag-evaluation.md`
 
 Each `docs/NN-*.md` topic is meant to pair with an `experiments/NN_*` directory and a `src/` module. When you implement a stage, keep that numbering consistent.
 
 ## Conventions
+
+- Optional heavy dependencies (`faiss-cpu`, and later model SDKs) are imported lazily inside the backend that needs them, declared under `[project.optional-dependencies]`, and their tests are skipped when missing. The core install and test suite must work without them.
 
 - Every module starts with `from __future__ import annotations` and uses `@dataclass` for records with `typing` hints.
 - Tests and the default demo must run offline, with no network or API keys. This is why the embedder is deterministic. Real model or API backends should be added alongside the offline implementation, not replace it. Test-specific rules are in `.claude/rules/testing.md`.
