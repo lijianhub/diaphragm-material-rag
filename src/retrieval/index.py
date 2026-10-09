@@ -9,6 +9,7 @@ from typing import Dict, Iterable, List, Optional, Union
 from chunking import RecursiveChunker
 from embedding.embedder import SimpleEmbedder
 from ingestion.loader import Document
+from ingestion.parser import Section
 from tokenization import tokenize
 from vectorstore import ChunkRecord, VectorStore, create_store, load_store
 
@@ -113,20 +114,28 @@ class SearchIndex:
         self._records = None
 
     def _write_document(self, document: Document) -> int:
-        chunks = self.chunker.chunk(document.content, source=document.source)
-        doc_type = Path(document.source).suffix.lstrip(".").lower() or "text"
-        records = [
-            ChunkRecord(
-                id=f"{document.source}#{n}",
-                doc_id=document.source,
-                text=chunk.text,
-                source=document.source,
-                start=chunk.start,
-                end=chunk.end,
-                metadata={"doc_type": doc_type},
-            )
-            for n, chunk in enumerate(chunks)
-        ]
+        """Chunk each section separately, so a chunk never spans two pages or sheets and
+        carries its section's citation metadata (page, sheet, heading). Offsets are
+        relative to the section."""
+        doc_meta = {"doc_type": document.metadata.get("doc_type") or Path(document.source).suffix.lstrip(".").lower() or "text"}
+        if document.metadata.get("title"):
+            doc_meta["title"] = document.metadata["title"]
+        sections = document.sections or [Section(document.content)]
+
+        records: List[ChunkRecord] = []
+        for section_index, section in enumerate(sections):
+            for chunk in self.chunker.chunk(section.text, source=document.source):
+                records.append(
+                    ChunkRecord(
+                        id=f"{document.source}#{len(records)}",
+                        doc_id=document.source,
+                        text=chunk.text,
+                        source=document.source,
+                        start=chunk.start,
+                        end=chunk.end,
+                        metadata={**doc_meta, **section.metadata, "section": section_index},
+                    )
+                )
         self.store.add(records, self.embedder.encode_many([record.text for record in records]))
         return len(records)
 
@@ -161,11 +170,12 @@ class SearchIndex:
             self._invalidate()
         return removed
 
-    def sync(self, documents: Iterable[Document]) -> SyncStats:
-        """Make the index match ``documents`` exactly: upsert them, delete everything else."""
+    def sync(self, documents: Iterable[Document], keep: Iterable[str] = ()) -> SyncStats:
+        """Make the index match ``documents``: upsert them and delete every other document,
+        except those listed in ``keep`` (e.g. files that failed to parse this run)."""
         documents = list(documents)
         stats = self.upsert_documents(documents)
-        present = {document.source for document in documents}
+        present = {document.source for document in documents} | set(keep)
         stats.removed = self.remove_documents([doc_id for doc_id in self.document_ids() if doc_id not in present])
         return stats
 

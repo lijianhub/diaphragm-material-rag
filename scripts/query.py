@@ -20,8 +20,21 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from generation.rag_chain import RAGPipeline
-from ingestion.loader import load_documents
+from ingestion.loader import ingest
 from retrieval.index import MANIFEST_FILE, SearchIndex
+
+
+def citation(result) -> str:
+    """"manual.pdf, page 3" / "lots.xlsx, sheet Q3" / "guide.md, section Cooling"."""
+    parts = [Path(result.source).name]
+    meta = result.metadata
+    if "page" in meta:
+        parts.append(f"page {meta['page']}")
+    if "sheet" in meta:
+        parts.append(f"sheet {meta['sheet']}")
+    if "heading" in meta:
+        parts.append(f"section \"{meta['heading']}\"")
+    return ", ".join(parts) + f" [{result.start}:{result.end}]"
 
 
 def main() -> None:
@@ -38,7 +51,7 @@ def main() -> None:
     else:
         print(f"(no saved index at {args.index}; indexing {args.source} in memory. Run scripts/index.py to persist it.)\n")
         index = SearchIndex()
-        index.sync(load_documents(args.source))
+        index.sync(ingest(args.source).documents)
 
     results = index.search(args.question, top_k=args.top_k)
     if not results:
@@ -50,7 +63,7 @@ def main() -> None:
     print("\nAnswer:\n" + answer["answer"])
     print("\nSources:")
     for result in results:
-        print(f"- {Path(result.source).name} [{result.start}:{result.end}] score={result.score:.3f}")
+        print(f"- {citation(result)}  score={result.score:.3f}")
 
 
 if __name__ == "__main__":

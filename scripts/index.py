@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import shutil
 import sys
 import time
@@ -22,7 +23,7 @@ SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from ingestion.loader import Document, load_documents
+from ingestion.loader import Document, ingest
 from retrieval.index import MANIFEST_FILE, SearchIndex
 from vectorstore import STORE_KINDS
 
@@ -32,7 +33,7 @@ def _portable(document: Document, base: Path) -> Document:
     on one machine (or in a container) still matches the files on another."""
     path = Path(document.source).resolve()
     source = path.relative_to(base).as_posix() if path.is_relative_to(base) else path.as_posix()
-    return Document(source=source, content=document.content)
+    return dataclasses.replace(document, source=source)  # keep metadata and sections
 
 
 def main() -> None:
@@ -55,8 +56,20 @@ def main() -> None:
         print(f"creating new index (store={args.store})")
 
     started = time.perf_counter()
-    documents = [_portable(document, REPO_ROOT) for document in load_documents(args.source)]
-    stats = index.sync(documents)
+    result = ingest(args.source)
+    print(f"ingest: {result.summary()}")
+    for failure in result.failures:
+        print(f"  FAILED  {failure.source}: {failure.reason}")
+    for duplicate, original in result.duplicates:
+        print(f"  duplicate  {duplicate} has the same content as {original}")
+    if result.failures:
+        # Never delete a failed file's previous chunks just because it could not be read this time.
+        print("  (files that failed keep their previously indexed version)")
+
+    documents = [_portable(document, REPO_ROOT) for document in result.documents]
+    failed = {_portable(Document(source=f.source, content=""), REPO_ROOT).source for f in result.failures}
+    keep = [doc_id for doc_id in index.document_ids() if doc_id in failed]
+    stats = index.sync(documents, keep=keep)
     index.save(args.out)
 
     print(f"documents={len(documents)} {stats}")

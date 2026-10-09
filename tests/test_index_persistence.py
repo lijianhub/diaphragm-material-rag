@@ -80,3 +80,32 @@ def test_load_rejects_an_embedder_that_does_not_match_the_index(tmp_path):
 def test_load_missing_index_raises_file_not_found(tmp_path):
     with pytest.raises(FileNotFoundError):
         SearchIndex.load(tmp_path / "nothing-here")
+
+
+def test_chunks_inherit_section_metadata_for_citations(tmp_path):
+    from ingestion.loader import load_documents
+    from tests.file_builders import write_pdf, write_xlsx
+
+    write_pdf(tmp_path / "manual.pdf", ["Forming pressure limits apply.", "Springback is compensated by over-forming."])
+    write_xlsx(tmp_path / "lots.xlsx", {"Q3 lots": [["Lot", "Result"], ["L-7", "rejected for tearing"]]})
+    index = SearchIndex()
+    index.sync(load_documents(tmp_path))
+
+    pdf_hit = index.search("How is springback compensated?", top_k=1)[0]
+    xlsx_hit = index.search("Which lot was rejected for tearing?", top_k=1)[0]
+
+    assert pdf_hit.source.endswith("manual.pdf") and pdf_hit.metadata["page"] == 2
+    assert xlsx_hit.metadata["sheet"] == "Q3 lots"
+    assert pdf_hit.metadata["doc_type"] == "pdf"
+    ids = [record.id for record in index.store.records()]
+    assert len(ids) == len(set(ids))
+
+
+def test_sync_keeps_documents_listed_in_keep():
+    index = SearchIndex()
+    index.sync(DOCS)
+
+    stats = index.sync(DOCS[:1], keep=["quality.txt"])
+
+    assert stats.removed == 1
+    assert set(index.document_ids()) == {"forming.txt", "quality.txt"}

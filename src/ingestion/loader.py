@@ -1,56 +1,104 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, List, Union
+from typing import Any, Dict, Iterable, List, Tuple, Union
 
-try:
-    from pypdf import PdfReader
-except ImportError:  # pragma: no cover
-    PdfReader = None
+from .parser import ParseError, Section, parse_file, supported_suffixes
+
+PathInput = Union[str, Path, Iterable[Union[str, Path]]]
 
 
 @dataclass
 class Document:
     source: str
     content: str
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    # Citation units (pages, sheets, heading sections). Empty means "one section: content".
+    sections: List[Section] = field(default_factory=list)
 
 
-def _read_pdf_file(path: Path) -> str:
-    if PdfReader is None:
-        raise ImportError("PDF support requires the 'pypdf' package. Install it with: pip install pypdf")
-
-    reader = PdfReader(str(path))
-    pages = []
-    for page in reader.pages:
-        pages.append(page.extract_text() or "")
-    return "\n".join(pages)
+@dataclass
+class IngestFailure:
+    source: str
+    reason: str
 
 
-def load_documents(paths: Union[str, Path, Iterable[Union[str, Path]]]) -> List[Document]:
-    """Load text documents from a file, directory, or iterable of file paths."""
-    if isinstance(paths, (str, Path)):
-        file_paths = [Path(paths)]
-    else:
-        file_paths = [Path(p) for p in paths]
+@dataclass
+class IngestResult:
+    documents: List[Document] = field(default_factory=list)
+    failures: List[IngestFailure] = field(default_factory=list)
+    skipped: List[str] = field(default_factory=list)
+    duplicates: List[Tuple[str, str]] = field(default_factory=list)  # (duplicate, first seen)
 
-    documents: List[Document] = []
-    for path in file_paths:
-        if path.is_dir():
-            candidates = sorted(path.rglob("*"))
-            for candidate in candidates:
-                if candidate.is_file() and candidate.suffix.lower() in {".txt", ".md", ".json", ".csv", ".pdf"}:
-                    if candidate.suffix.lower() == ".pdf":
-                        content = _read_pdf_file(candidate)
-                    else:
-                        content = candidate.read_text(encoding="utf-8")
-                    documents.append(Document(source=str(candidate), content=content))
-        elif path.is_file():
-            suffix = path.suffix.lower()
-            if suffix == ".pdf":
-                content = _read_pdf_file(path)
-            else:
-                content = path.read_text(encoding="utf-8")
-            documents.append(Document(source=str(path), content=content))
+    def summary(self) -> str:
+        return (
+            f"loaded={len(self.documents)} failed={len(self.failures)} "
+            f"skipped={len(self.skipped)} duplicates={len(self.duplicates)}"
+        )
 
-    return documents
+
+def _is_junk(path: Path) -> bool:
+    # Hidden files and Office lock files ("~$report.docx") are never documents.
+    return path.name.startswith((".", "~$"))
+
+
+def _expand(paths: PathInput) -> Tuple[List[Path], List[str]]:
+    """Explicit files are always attempted; directories contribute supported, non-junk files."""
+    roots = [Path(paths)] if isinstance(paths, (str, Path)) else [Path(p) for p in paths]
+    suffixes = set(supported_suffixes())
+    files: List[Path] = []
+    skipped: List[str] = []
+    for root in roots:
+        if root.is_dir():
+            for candidate in sorted(root.rglob("*")):
+                if not candidate.is_file():
+                    continue
+                if _is_junk(candidate) or candidate.suffix.lower() not in suffixes:
+                    skipped.append(str(candidate))
+                else:
+                    files.append(candidate)
+        elif root.is_file():
+            files.append(root)
+    return files, skipped
+
+
+def load_file(path: Path) -> Document:
+    parsed = parse_file(path)
+    content = "\n\n".join(section.text for section in parsed.sections)
+    metadata = {"doc_type": path.suffix.lstrip(".").lower() or "text", **parsed.metadata}
+    return Document(source=str(path), content=content, metadata=metadata, sections=parsed.sections)
+
+
+def ingest(paths: PathInput) -> IngestResult:
+    """Load every supported file, collecting failures instead of stopping at the first one.
+
+    A corrupted file, a scanned PDF without text or an unsupported explicit file
+    becomes an ``IngestFailure``; the rest of the batch still loads.
+    """
+    files, skipped = _expand(paths)
+    result = IngestResult(skipped=skipped)
+    seen: Dict[str, str] = {}
+    for path in files:
+        try:
+            document = load_file(path)
+        except (ParseError, OSError) as exc:
+            result.failures.append(IngestFailure(source=str(path), reason=str(exc)))
+            continue
+        digest = hashlib.sha256(document.content.encode("utf-8")).hexdigest()
+        if digest in seen:
+            result.duplicates.append((document.source, seen[digest]))
+        else:
+            seen[digest] = document.source
+        result.documents.append(document)
+    return result
+
+
+def load_documents(paths: PathInput) -> List[Document]:
+    """Strict loading: raise if any file fails. Use ``ingest`` to keep going and get a report."""
+    result = ingest(paths)
+    if result.failures:
+        details = "; ".join(f"{Path(f.source).name}: {f.reason}" for f in result.failures)
+        raise ValueError(f"{len(result.failures)} file(s) could not be loaded: {details}")
+    return result.documents

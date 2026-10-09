@@ -1,36 +1,10 @@
 from pathlib import Path
 
+import pytest
 from pypdf import PdfReader
 
 from ingestion.loader import Document, load_documents
-
-
-def _write_pdf(path: Path, text: str) -> None:
-    escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-    stream = f"BT /F1 16 Tf 50 100 Td ({escaped}) Tj ET".encode("latin-1", errors="replace")
-    objects = [
-        b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
-        f"<< /Length {len(stream)} >>\nstream\n".encode("latin-1") + stream + b"\nendstream",
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    ]
-
-    pdf_parts = [b"%PDF-1.4\n"]
-    offsets = [0]
-    for index, obj in enumerate(objects, start=1):
-        offsets.append(len(b"".join(pdf_parts)))
-        pdf_parts.append(f"{index} 0 obj\n".encode("latin-1"))
-        pdf_parts.append(obj)
-        pdf_parts.append(b"\nendobj\n")
-
-    xref_offset = len(b"".join(pdf_parts))
-    pdf_parts.append(f"xref\n0 {len(objects) + 1}\n".encode("latin-1"))
-    pdf_parts.append(b"0000000000 65535 f \n")
-    for offset in offsets[1:]:
-        pdf_parts.append(f"{offset:010d} 00000 n \n".encode("latin-1"))
-    pdf_parts.append(f"trailer\n<< /Root 1 0 R /Size {len(objects) + 1} >>\nstartxref\n{xref_offset}\n%%EOF\n".encode("latin-1"))
-    path.write_bytes(b"".join(pdf_parts))
+from tests.file_builders import write_pdf
 
 
 def test_load_documents_reads_text_files(tmp_path):
@@ -60,7 +34,7 @@ def test_load_documents_from_directory(tmp_path):
 
 def test_load_documents_reads_pdf_files(tmp_path):
     pdf_path = tmp_path / "sample.pdf"
-    _write_pdf(pdf_path, "Alpha beta gamma")
+    write_pdf(pdf_path, "Alpha beta gamma")
 
     docs = load_documents(pdf_path)
 
@@ -71,3 +45,50 @@ def test_load_documents_reads_pdf_files(tmp_path):
     reader = PdfReader(str(pdf_path))
     extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
     assert "Alpha beta gamma" in extracted
+
+
+def test_ingest_reports_failures_and_keeps_going(tmp_path):
+    from ingestion.loader import ingest
+
+    (tmp_path / "good.txt").write_text("Springback notes", encoding="utf-8")
+    (tmp_path / "broken.docx").write_bytes(b"not a zip")
+    (tmp_path / "~$good.docx").write_bytes(b"office lock file")
+    (tmp_path / ".hidden.txt").write_text("secret", encoding="utf-8")
+    (tmp_path / "drawing.dwg").write_bytes(b"\x00")
+
+    result = ingest(tmp_path)
+
+    assert [Path(d.source).name for d in result.documents] == ["good.txt"]
+    assert [Path(f.source).name for f in result.failures] == ["broken.docx"]
+    assert sorted(Path(s).name for s in result.skipped) == [".hidden.txt", "drawing.dwg", "~$good.docx"]
+
+
+def test_ingest_flags_identical_content_under_different_names(tmp_path):
+    from ingestion.loader import ingest
+
+    (tmp_path / "a.txt").write_text("Same text", encoding="utf-8")
+    (tmp_path / "copy of a.txt").write_text("Same text", encoding="utf-8")
+
+    result = ingest(tmp_path)
+
+    assert len(result.documents) == 2
+    assert [(Path(dup).name, Path(orig).name) for dup, orig in result.duplicates] == [("copy of a.txt", "a.txt")]
+
+
+def test_documents_carry_type_title_and_sections(tmp_path):
+    path = tmp_path / "procedure.md"
+    path.write_text("# Aging\nVacuum only.\n\n## Cooling\nAir cool.", encoding="utf-8")
+
+    document = load_documents(path)[0]
+
+    assert document.metadata["doc_type"] == "md"
+    assert document.metadata["title"] == "Aging"
+    assert len(document.sections) == 2
+    assert "Vacuum only." in document.content and "Air cool." in document.content
+
+
+def test_load_documents_raises_on_failures_in_strict_mode(tmp_path):
+    (tmp_path / "broken.docx").write_bytes(b"not a zip")
+
+    with pytest.raises(ValueError, match="broken.docx"):
+        load_documents(tmp_path)
