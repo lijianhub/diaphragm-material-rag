@@ -70,3 +70,23 @@ The remaining rank-1 misses show what to fix next:
 
 - **q11** ("…how is fatigue performance *verified*?"): the source says "verify", and with no stemming the two do not match. The frequent phrase "fatigue performance" pulls in a chunk from another document. BM25's IDF weighting and light stemming address both.
 - **q14**: the top hit is an overlap fragment that repeats the question's wording but not the answer; the full chunk ranks second. Overlap improves recall but creates near-duplicates. Reranking, or merging adjacent chunks, addresses this.
+
+### BM25 and stemming
+
+Changes: `retrieval/bm25.py` (Okapi BM25 with Lucene IDF, k1=1.5, b=0.75), a light suffix-stripping stemmer in `tokenization.py`, and two `SearchIndex` options, `lexical` and `stem_tokens`. BM25 scores are unbounded, so they are max-normalized per query before being blended with cosine.
+
+Ablation, `chunk_size=300`, k=1:
+
+| lexical | stemming | alpha 0.0 | alpha 0.5 |
+|---|---|---|---|
+| coverage | no | 0.929 | 0.857 |
+| coverage | yes | **1.000** | **1.000** |
+| bm25 | no | 0.929 | 0.929 |
+| bm25 | yes | **1.000** | **1.000** |
+
+With the new defaults (`bm25`, stemming, alpha 0.5), hit@1, recall@3 and MRR are all 1.000; MRR was 0.917 before.
+
+- **Stemming is the change that matters.** It fixes q11 ("verified" vs "verify") and q14 ("measures" vs "measuring"), which is vocabulary mismatch that no weighting scheme can solve.
+- **This benchmark cannot separate BM25 from coverage.** Both reach 1.000 with stemming. A stress test with smaller chunks (k=5, chunk sizes 150 and 200) gives MRR differences of 0.02–0.04 in either direction. With 14 questions, a single rank change moves MRR by about 0.036, so these differences are noise. With 4 documents and a small vocabulary, IDF has almost no signal to work with.
+- **Why BM25 is still the default:** IDF, term-frequency saturation and length normalization are what keep lexical retrieval stable on a larger corpus with many common domain terms ("diaphragm", "alloy", "forming"), and BM25 did not regress here. The choice rests on that reasoning, not on a score difference this benchmark cannot measure.
+- **Next:** the benchmark is saturated. Before comparing fusion methods (RRF), expand it with more documents, distractor passages and harder questions; otherwise every method will score 1.000.

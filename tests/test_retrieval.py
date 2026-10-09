@@ -1,3 +1,5 @@
+import pytest
+
 from embedding.embedder import SimpleEmbedder
 from ingestion.loader import Document
 from retrieval.hybrid import hybrid_search
@@ -59,3 +61,19 @@ def test_search_index_returns_chunks_with_their_source():
 
 def test_search_index_on_empty_index_returns_nothing():
     assert SearchIndex().search("anything") == []
+
+
+def test_search_index_bm25_with_stemming_matches_inflected_query():
+    documents = [
+        Document(source="testing.txt", content="Pressure cycling tests verify fatigue performance of each lot."),
+        Document(source="alloy.txt", content="Fatigue performance depends on the alloy and its surface condition."),
+    ]
+    stemmed = SearchIndex(lexical="bm25", stem_tokens=True, alpha=0.0)
+    stemmed.add_documents(documents)
+
+    assert stemmed.search("How is fatigue performance verified?", top_k=1)[0].source == "testing.txt"
+
+
+def test_search_index_rejects_unknown_lexical_scorer():
+    with pytest.raises(ValueError):
+        SearchIndex(lexical="tfidf")
