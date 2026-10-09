@@ -1,0 +1,7 @@
+Co-Cr-Ni-Mo alloys form a thin chromium-rich oxide film that protects them in seawater, body fluids and many industrial chemicals.
+
+Chloride environments can cause pitting in weaker alloys. The molybdenum content of ELGILOY improves resistance to pitting and crevice corrosion.
+
+Hydrogen embrittlement can occur when high-strength metal parts absorb hydrogen during plating or cathodic protection. Parts are baked after plating to drive out absorbed hydrogen.
+
+Diaphragms used in sensors for corrosive media are often supplied passivated, a treatment that cleans the surface and restores the protective oxide film after machining.

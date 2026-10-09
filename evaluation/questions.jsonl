@@ -1,14 +1,30 @@
-{"id": "q01", "question": "Which material properties does the diaphragm forming process depend on?"}
-{"id": "q02", "question": "Why are ELGILOY and HAVAR chosen for diaphragms?"}
-{"id": "q03", "question": "Should the alloy be aged before or after forming?"}
-{"id": "q04", "question": "Where does most of the strength of ELGILOY come from?"}
-{"id": "q05", "question": "What is HAVAR foil typically used for?"}
-{"id": "q06", "question": "Why must aging be done in vacuum or a protective atmosphere?"}
-{"id": "q07", "question": "How can wrinkling in the flange be prevented?"}
-{"id": "q08", "question": "What reduces the risk of the sheet tearing?"}
-{"id": "q09", "question": "How do toolmakers compensate for springback in cobalt alloys?"}
-{"id": "q10", "question": "Why is excessive thinning a problem and how is it checked?"}
-{"id": "q11", "question": "How is the fatigue performance of finished diaphragms verified?"}
-{"id": "q12", "question": "Why are scratches and pits on the surface a concern?"}
-{"id": "q13", "question": "What information is on the material certificate for each lot of strip?"}
-{"id": "q14", "question": "Which equipment measures the formed shape against the nominal profile?"}
+{"id": "q01", "category": "keyword", "question": "Which material properties does the diaphragm forming process depend on?"}
+{"id": "q02", "category": "keyword", "question": "Why are ELGILOY and HAVAR chosen for diaphragms?"}
+{"id": "q03", "category": "keyword", "question": "Should the alloy be aged before or after forming?"}
+{"id": "q04", "category": "keyword", "question": "Where does most of the strength of ELGILOY come from?"}
+{"id": "q05", "category": "keyword", "question": "What is HAVAR foil typically used for?"}
+{"id": "q06", "category": "keyword", "question": "Why must aging be done in vacuum or a protective atmosphere?"}
+{"id": "q07", "category": "keyword", "question": "How can wrinkling in the flange be prevented?"}
+{"id": "q08", "category": "keyword", "question": "What reduces the risk of the sheet tearing?"}
+{"id": "q09", "category": "keyword", "question": "How do toolmakers compensate for springback in cobalt alloys?"}
+{"id": "q10", "category": "keyword", "question": "Why is excessive thinning a problem and how is it checked?"}
+{"id": "q11", "category": "keyword", "question": "How is the fatigue performance of finished diaphragms verified?"}
+{"id": "q12", "category": "keyword", "question": "Why are scratches and pits on the surface a concern?"}
+{"id": "q13", "category": "keyword", "question": "What information is on the material certificate for each lot of strip?"}
+{"id": "q14", "category": "keyword", "question": "Which equipment measures the formed shape against the nominal profile?"}
+{"id": "q15", "category": "distractor", "question": "How does shot peening help springs resist fatigue?"}
+{"id": "q16", "category": "paraphrase", "question": "Why do cobalt alloy springs keep their force better when hot?"}
+{"id": "q17", "category": "paraphrase", "question": "What happens if too much forming oil is put on the blank?"}
+{"id": "q18", "category": "keyword", "question": "What is galling?"}
+{"id": "q19", "category": "distractor", "question": "Why must parts be cleaned before aging?"}
+{"id": "q20", "category": "paraphrase", "question": "How do we know when a forming die is worn out?"}
+{"id": "q21", "category": "keyword", "question": "Which element in ELGILOY improves resistance to pitting?"}
+{"id": "q22", "category": "paraphrase", "question": "Why don't Co-Cr-Ni-Mo alloys rust in the sea?"}
+{"id": "q23", "category": "keyword", "question": "Why are plated parts baked afterwards?"}
+{"id": "q24", "category": "paraphrase", "question": "What does passivation do to a diaphragm surface?"}
+{"id": "q25", "category": "multi", "question": "What records accompany a lot from raw strip to finished diaphragm?"}
+{"id": "q26", "category": "keyword", "question": "What do beach marks on a fracture surface indicate?"}
+{"id": "q27", "category": "distractor", "question": "What happens when a lot fails inspection?"}
+{"id": "q28", "category": "multi", "question": "Which factors shorten the fatigue life of a diaphragm?"}
+{"id": "q29", "category": "paraphrase", "question": "How is the stiffness of a coiled spring checked?"}
+{"id": "q30", "category": "multi", "question": "How do cobalt alloys behave differently from ordinary steels?"}

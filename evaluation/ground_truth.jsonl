@@ -12,3 +12,19 @@
 {"id": "q12", "answer": "They act as crack initiation sites.", "evidence": ["act as crack initiation sites"]}
 {"id": "q13", "answer": "Chemical composition, tensile strength and hardness.", "evidence": ["chemical composition, tensile strength and hardness"]}
 {"id": "q14", "answer": "A coordinate measuring machine or an optical profiler.", "evidence": ["coordinate measuring machine or an optical profiler"]}
+{"id": "q15", "answer": "It introduces compressive residual stress at the surface, which delays crack initiation.", "evidence": ["introduces compressive residual stress at the surface"]}
+{"id": "q16", "answer": "Cobalt alloys resist stress relaxation at elevated temperature better than stainless steel.", "evidence": ["cobalt alloys resist relaxation better than stainless steel"]}
+{"id": "q17", "answer": "Too much lubricant can cause wrinkles.", "evidence": ["too much lubricant can cause wrinkles"]}
+{"id": "q18", "answer": "Adhesive wear in which blank material sticks to the tool surface.", "evidence": ["adhesive wear in which material from the blank sticks to the tool surface"]}
+{"id": "q19", "answer": "Lubricant residue can contaminate the surface and leave carbon deposits during aging.", "evidence": ["leave carbon deposits during aging"]}
+{"id": "q20", "answer": "When the measured profile of sample parts drifts toward the tolerance limit.", "evidence": ["profile drifts toward the tolerance limit"]}
+{"id": "q21", "answer": "Molybdenum.", "evidence": ["molybdenum content of elgiloy improves resistance to pitting"]}
+{"id": "q22", "answer": "A thin chromium-rich oxide film protects them.", "evidence": ["thin chromium-rich oxide film"]}
+{"id": "q23", "answer": "To drive out absorbed hydrogen and prevent hydrogen embrittlement.", "evidence": ["baked after plating to drive out absorbed hydrogen"]}
+{"id": "q24", "answer": "It cleans the surface and restores the protective oxide film after machining.", "evidence": ["restores the protective oxide film after machining"]}
+{"id": "q25", "answer": "A material certificate for the strip and a lot number linking finished parts to the coil, press and heat treatment run.", "evidence": ["material certificates must accompany every lot of strip", "links the finished diaphragms to the strip coil"]}
+{"id": "q26", "answer": "Fatigue.", "evidence": ["beach marks on the fracture surface indicate fatigue"]}
+{"id": "q27", "answer": "A nonconformance report records the defect, root cause and corrective action.", "evidence": ["nonconformance report is raised when a lot fails inspection"]}
+{"id": "q28", "answer": "Excessive thinning, surface scratches and pits, and oxide scale from heat treatment.", "evidence": ["excessive thinning concentrates stress", "scratches and pits act as crack initiation sites", "reduces fatigue life in thin sections"]}
+{"id": "q29", "answer": "The spring rate is measured on a load tester.", "evidence": ["spring rate is measured on a load tester"]}
+{"id": "q30", "answer": "They show more springback than mild steel and resist relaxation better than stainless steel.", "evidence": ["show more springback than mild steel", "resist relaxation better than stainless steel"]}

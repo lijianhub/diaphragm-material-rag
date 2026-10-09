@@ -1,0 +1,7 @@
+Forming lubricants reduce friction between the blank and the die. A thin, uniform film is applied to both sides of the blank; too much lubricant can cause wrinkles, while too little leads to galling and scoring.
+
+Galling is adhesive wear in which material from the blank sticks to the tool surface. Hard coatings on the punch and die, such as titanium nitride, reduce galling when forming cobalt alloys.
+
+Lubricant residue must be removed before heat treatment, because it can contaminate the surface and leave carbon deposits during aging. Parts are cleaned in an alkaline wash followed by a rinse.
+
+Die wear is monitored by measuring the formed profile of sample parts at fixed intervals. When the profile drifts toward the tolerance limit, the die is reworked or replaced.

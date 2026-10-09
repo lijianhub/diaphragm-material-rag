@@ -12,6 +12,7 @@ class EvalExample:
     question: str
     answer: str
     evidence: List[str]
+    category: str = "general"
 
 
 def _read_jsonl(path: Path) -> List[dict]:
@@ -36,6 +37,7 @@ def load_dataset(questions_path: Union[str, Path], ground_truth_path: Union[str,
                 question=row["question"],
                 answer=truth.get("answer", ""),
                 evidence=list(truth["evidence"]),
+                category=row.get("category", "general"),
             )
         )
     return examples

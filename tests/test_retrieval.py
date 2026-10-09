@@ -77,3 +77,23 @@ def test_search_index_bm25_with_stemming_matches_inflected_query():
 def test_search_index_rejects_unknown_lexical_scorer():
     with pytest.raises(ValueError):
         SearchIndex(lexical="tfidf")
+
+
+def test_search_index_rrf_prefers_chunks_both_retrievers_rank_well():
+    documents = [
+        Document(source="springs.txt", content="Shot peening introduces compressive residual stress in springs."),
+        Document(source="forming.txt", content="Residual stress after forming causes springback in the part."),
+        Document(source="other.txt", content="Material certificates list hardness and tensile strength."),
+    ]
+    index = SearchIndex(fusion="rrf")
+    index.add_documents(documents)
+
+    results = index.search("How does shot peening change residual stress in springs?", top_k=3)
+
+    assert results[0].source == "springs.txt"
+    assert [r.score for r in results] == sorted((r.score for r in results), reverse=True)
+
+
+def test_search_index_rejects_unknown_fusion():
+    with pytest.raises(ValueError):
+        SearchIndex(fusion="max")

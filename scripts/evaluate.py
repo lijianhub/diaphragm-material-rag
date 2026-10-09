@@ -21,7 +21,7 @@ if str(SRC_DIR) not in sys.path:
 from chunking import RecursiveChunker
 from evaluation import evaluate_retrieval, load_dataset
 from ingestion.loader import load_documents
-from retrieval.index import LEXICAL_SCORERS, SearchIndex
+from retrieval.index import FUSION_METHODS, LEXICAL_SCORERS, SearchIndex
 
 
 def main() -> None:
@@ -30,6 +30,8 @@ def main() -> None:
     parser.add_argument("--alpha", type=float, default=0.5, help="dense weight in hybrid scoring (0 = lexical only)")
     parser.add_argument("--lexical", choices=LEXICAL_SCORERS, default="bm25", help="lexical scorer blended with dense")
     parser.add_argument("--stem", action=argparse.BooleanOptionalAction, default=True, help="stem terms for lexical scoring")
+    parser.add_argument("--fusion", choices=FUSION_METHODS, default="weighted", help="how dense and lexical rankings are combined")
+    parser.add_argument("--rrf-k", type=int, default=60, help="RRF rank constant")
     parser.add_argument("--chunk-size", type=int, default=300)
     parser.add_argument("--overlap", type=int, default=50)
     parser.add_argument("--output", type=Path, default=REPO_ROOT / "evaluation" / "results.jsonl")
@@ -42,14 +44,18 @@ def main() -> None:
         alpha=args.alpha,
         lexical=args.lexical,
         stem_tokens=args.stem,
+        fusion=args.fusion,
+        rrf_k=args.rrf_k,
     )
     index.add_documents(load_documents(corpus))
 
     examples = load_dataset(REPO_ROOT / "evaluation" / "questions.jsonl", REPO_ROOT / "evaluation" / "ground_truth.jsonl")
     report = evaluate_retrieval(examples, lambda question, k: [r.text for r in index.search(question, top_k=k)], k=args.k)
 
-    print(f"documents={len(corpus)} chunks={len(index)} questions={len(examples)} k={report.k} alpha={args.alpha} lexical={args.lexical} stem={args.stem}")
+    print(f"documents={len(corpus)} chunks={len(index)} questions={len(examples)} k={report.k} alpha={args.alpha} lexical={args.lexical} stem={args.stem} fusion={args.fusion}")
     print(f"hit@{report.k}={report.hit_rate:.3f}  recall@{report.k}={report.recall:.3f}  mrr={report.mrr:.3f}")
+    for category, score in report.by_category().items():
+        print(f"  {category:<11} n={score.count:<3} hit={score.hit_rate:.3f}  recall={score.recall:.3f}  mrr={score.mrr:.3f}")
     for miss in report.misses:
         print(f"  miss {miss.id}: {miss.question}")
 

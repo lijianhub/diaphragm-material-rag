@@ -1,0 +1,7 @@
+ELGILOY wire is widely used for springs in watches, medical devices and instruments. Springs are coiled from cold-drawn wire and then aged to raise their elastic limit.
+
+Spring fatigue life depends on stress range, surface finish and residual stress. Shot peening introduces compressive residual stress at the surface and delays crack initiation in springs.
+
+Stress relaxation is the gradual loss of spring force at elevated temperature. Cobalt alloys resist relaxation better than stainless steel, which is why they are chosen for springs exposed to heat.
+
+Wire diameter is checked with a micrometer at the start of each coil batch, and the spring rate is measured on a load tester before the springs are packed.

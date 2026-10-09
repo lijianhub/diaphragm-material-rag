@@ -81,3 +81,32 @@ def test_bundled_ground_truth_evidence_exists_in_sample_corpus():
 
     for example in examples:
         assert match_evidence([corpus], example.evidence)[0] == set(range(len(example.evidence))), example.id
+
+
+def test_report_breaks_metrics_down_by_category(tmp_path):
+    questions = tmp_path / "questions.jsonl"
+    truth = tmp_path / "ground_truth.jsonl"
+    rows = [("a", "keyword", "alpha?"), ("b", "keyword", "beta?"), ("c", "paraphrase", "gamma?")]
+    questions.write_text("\n".join(json.dumps({"id": i, "category": c, "question": q}) for i, c, q in rows), encoding="utf-8")
+    truth.write_text(
+        "\n".join(json.dumps({"id": i, "evidence": [f"{i} fact"]}) for i, _, _ in rows),
+        encoding="utf-8",
+    )
+    corpus = {"alpha?": ["a fact"], "beta?": ["noise"], "gamma?": ["c fact"]}
+
+    report = evaluate_retrieval(load_dataset(questions, truth), lambda q, k: corpus[q], k=1)
+    by_category = report.by_category()
+
+    assert set(by_category) == {"keyword", "paraphrase"}
+    assert by_category["keyword"].count == 2
+    assert by_category["keyword"].hit_rate == 0.5
+    assert by_category["paraphrase"].hit_rate == 1.0
+
+
+def test_category_defaults_to_general(tmp_path):
+    questions = tmp_path / "questions.jsonl"
+    truth = tmp_path / "ground_truth.jsonl"
+    questions.write_text(json.dumps({"id": "a", "question": "Q?"}), encoding="utf-8")
+    truth.write_text(json.dumps({"id": "a", "evidence": ["x"]}), encoding="utf-8")
+
+    assert load_dataset(questions, truth)[0].category == "general"

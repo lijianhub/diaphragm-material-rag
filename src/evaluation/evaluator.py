@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Callable, List, Sequence, Set
+from typing import Callable, Dict, List, Sequence, Set
 
 from .dataset import EvalExample
 from .metrics import hit_at_k, recall_at_k, reciprocal_rank
@@ -33,10 +33,29 @@ def match_evidence(passages: Sequence[str], evidence: Sequence[str]) -> List[Set
 class QuestionResult:
     id: str
     question: str
+    category: str
     hit: float
     recall: float
     reciprocal_rank: float
     retrieved: List[str]
+
+
+@dataclass
+class CategoryScore:
+    count: int
+    hit_rate: float
+    recall: float
+    mrr: float
+
+
+def _aggregate(results: Sequence[QuestionResult]) -> CategoryScore:
+    count = len(results)
+    return CategoryScore(
+        count=count,
+        hit_rate=sum(r.hit for r in results) / count,
+        recall=sum(r.recall for r in results) / count,
+        mrr=sum(r.reciprocal_rank for r in results) / count,
+    )
 
 
 @dataclass
@@ -51,6 +70,13 @@ class EvalReport:
     def misses(self) -> List[QuestionResult]:
         return [result for result in self.results if not result.hit]
 
+    def by_category(self) -> Dict[str, CategoryScore]:
+        """Metrics per question category, so a method's weak spots are not averaged away."""
+        groups: Dict[str, List[QuestionResult]] = {}
+        for result in self.results:
+            groups.setdefault(result.category, []).append(result)
+        return {category: _aggregate(group) for category, group in sorted(groups.items())}
+
 
 def evaluate_retrieval(examples: Sequence[EvalExample], search: SearchFn, k: int = 3) -> EvalReport:
     if not examples:
@@ -64,6 +90,7 @@ def evaluate_retrieval(examples: Sequence[EvalExample], search: SearchFn, k: int
             QuestionResult(
                 id=example.id,
                 question=example.question,
+                category=example.category,
                 hit=hit_at_k(matches, k),
                 recall=recall_at_k(matches, len(example.evidence), k),
                 reciprocal_rank=reciprocal_rank(matches),
@@ -71,11 +98,5 @@ def evaluate_retrieval(examples: Sequence[EvalExample], search: SearchFn, k: int
             )
         )
 
-    count = len(results)
-    return EvalReport(
-        k=k,
-        hit_rate=sum(r.hit for r in results) / count,
-        recall=sum(r.recall for r in results) / count,
-        mrr=sum(r.reciprocal_rank for r in results) / count,
-        results=results,
-    )
+    overall = _aggregate(results)
+    return EvalReport(k=k, hit_rate=overall.hit_rate, recall=overall.recall, mrr=overall.mrr, results=results)

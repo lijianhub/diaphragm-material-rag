@@ -1,0 +1,7 @@
+Every production lot is assigned a lot number that links the finished diaphragms to the strip coil, the forming press and the heat treatment run.
+
+Inspection records list the measured profile height, flatness and thickness for a sample of parts from each lot. Records are kept for the lifetime of the product so that failures can be traced.
+
+When a part fails in service, a failure analysis examines the fracture surface. Beach marks on the fracture surface indicate fatigue, while a rough, fibrous surface suggests overload.
+
+A nonconformance report is raised when a lot fails inspection. The report records the defect, the root cause and the corrective action before the lot can be released or scrapped.

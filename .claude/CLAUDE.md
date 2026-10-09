@@ -18,7 +18,7 @@ python scripts/evaluate.py --k 3 --alpha 0.5  # retrieval metrics; writes evalua
 python experiments/01_naive_rag/run.py        # naive demo: whole documents, no chunking or retrieval
 ```
 
-Run `scripts/evaluate.py` before and after any change to chunking, embedding or retrieval, and report the metric change. It indexes only the tracked `data/raw/*.txt` samples, so scores are reproducible on every clone.
+Run `scripts/evaluate.py` before and after any change to chunking, embedding or retrieval, and report the metric change. It indexes only the tracked `data/raw/*.txt` samples, so scores are reproducible on every clone. Look at the per-category lines as well as the overall score. Never tune defaults (alpha, k1, rrf_k) to maximize the score on this set, because it is also the test set; justify defaults from first principles and use sweeps only as analysis.
 
 There is no linter or formatter configured, and `Makefile`, `.env.example`, `docker/` and `config/*.yaml` are currently empty.
 
@@ -44,8 +44,9 @@ The pipeline is ingestion → chunking → embedding → retrieval → generatio
 - `retrieval/dense.py`: `cosine_similarity` and `dense_search`.
 - `retrieval/hybrid.py`: `hybrid_search(query, query_vector, texts, vectors, top_k, alpha)` scores `alpha * cosine + (1 - alpha) * lexical coverage`, both in [0, 1]. The caller embeds the query with the same embedder as the corpus.
 - `retrieval/bm25.py`: `BM25(texts, k1, b, stem_tokens)` with Lucene IDF, which is never negative. `.scores(query)` is unbounded.
-- `retrieval/index.py`: `SearchIndex.add_documents()` chunks and embeds; `.search()` returns `SearchResult(text, source, start, end, score)`. It ranks by position, so duplicate chunk texts keep their own sources. The lexical side is `lexical="bm25"` (default, max-normalized per query) or `"coverage"`, with `stem_tokens=True` by default. BM25 is rebuilt lazily after `add_documents`, because IDF depends on the whole corpus.
-- `evaluation/`: relevance is judged by **evidence phrases** in `evaluation/ground_truth.jsonl` that must appear verbatim in a retrieved chunk, not by chunk ids, so the ground truth survives chunking changes. The metrics are hit@k, recall@k (over evidence phrases) and MRR. `tests/test_evaluation.py` checks that every evidence phrase exists in the corpus; when you edit the samples or questions, keep them in sync.
+- `retrieval/fusion.py`: `reciprocal_rank_fusion(rankings, k=60, weights)` and `rank_by_score`, which drops zero-score items so that "not retrieved" never gets a rank.
+- `retrieval/index.py`: `SearchIndex.add_documents()` chunks and embeds; `.search()` returns `SearchResult(text, source, start, end, score)`. It ranks by position, so duplicate chunk texts keep their own sources. The lexical side is `lexical="bm25"` (default) or `"coverage"`, with `stem_tokens=True` by default. `fusion="weighted"` (default) max-normalizes BM25 and blends it with cosine by `alpha`; `fusion="rrf"` fuses the two rankings, with `alpha` weighting them (0.5 means equal). BM25 is rebuilt lazily after `add_documents`, because IDF depends on the whole corpus.
+- `evaluation/`: relevance is judged by **evidence phrases** in `evaluation/ground_truth.jsonl` that must appear verbatim in a retrieved chunk, not by chunk ids, so the ground truth survives chunking changes. The metrics are hit@k, recall@k (over evidence phrases) and MRR, overall and per question `category` (`keyword`, `paraphrase`, `distractor`, `multi`). `tests/test_evaluation.py` checks that every evidence phrase exists in the corpus; when you edit the samples or questions, keep them in sync. When the benchmark saturates, expand it and freeze it **before** implementing the method it will judge, and record results in `docs/11-rag-evaluation.md`.
 - `generation/rag_chain.py`: `RAGPipeline.answer(question, documents)` takes raw strings, does keyword filtering and concatenation (no LLM call yet), and returns `{"answer", "context", "sources"}`. Its `sources` are placeholder `doc_N` labels; real sources come from `SearchResult`.
 
 ### Scaffolded but empty

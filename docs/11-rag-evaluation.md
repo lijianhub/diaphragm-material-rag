@@ -5,9 +5,12 @@ Retrieval is evaluated before generation: if the right passage is not retrieved,
 ## Run it
 
 ```bash
-python scripts/evaluate.py                 # k=3, alpha=0.5
-python scripts/evaluate.py --k 1 --alpha 0  # lexical only, strict top-1
+python scripts/evaluate.py                    # k=3, weighted fusion, alpha=0.5
+python scripts/evaluate.py --k 1 --alpha 0     # lexical only, strict top-1
+python scripts/evaluate.py --k 1 --fusion rrf  # Reciprocal Rank Fusion
 ```
+
+The script also prints metrics per question category, so a weakness in one kind of question is not averaged away.
 
 The script indexes the tracked `data/raw/*.txt` samples, runs every question in `evaluation/questions.jsonl`, prints the aggregate metrics and the misses, and writes per-question results to `evaluation/results.jsonl`.
 
@@ -32,9 +35,18 @@ Questions are paraphrased rather than copied from the text, so pure keyword matc
 | recall@k | Share of a question's evidence phrases covered by the top k, averaged over questions |
 | MRR | Mean of 1 / rank of the first relevant chunk (0 if none is retrieved) |
 
+## Question categories
+
+| Category | What it tests | Example |
+|---|---|---|
+| `keyword` | The question shares distinctive terms with the evidence | "What is galling?" |
+| `paraphrase` | Different words from the source (synonyms, informal wording) | "too much forming **oil**" vs "too much **lubricant**" |
+| `distractor` | Several chunks share the question's terms; only one holds the answer | "Why must parts be cleaned before aging?" (aging also appears in the heat-treatment notes) |
+| `multi` | Evidence spread over two or more documents; measured by recall@k | "How do cobalt alloys behave differently from ordinary steels?" |
+
 ## Results log
 
-14 questions over 4 sample documents, `RecursiveChunker(chunk_size=300, overlap=50)`.
+Entries are in chronological order. Earlier entries used the first benchmark of 14 questions over 4 documents; from "Expanded benchmark and RRF" onwards it has 30 questions over 8 documents. All runs use `RecursiveChunker(chunk_size=300, overlap=50)`.
 
 ### Baseline (initial scaffold)
 
@@ -90,3 +102,34 @@ With the new defaults (`bm25`, stemming, alpha 0.5), hit@1, recall@3 and MRR are
 - **This benchmark cannot separate BM25 from coverage.** Both reach 1.000 with stemming. A stress test with smaller chunks (k=5, chunk sizes 150 and 200) gives MRR differences of 0.02–0.04 in either direction. With 14 questions, a single rank change moves MRR by about 0.036, so these differences are noise. With 4 documents and a small vocabulary, IDF has almost no signal to work with.
 - **Why BM25 is still the default:** IDF, term-frequency saturation and length normalization are what keep lexical retrieval stable on a larger corpus with many common domain terms ("diaphragm", "alloy", "forming"), and BM25 did not regress here. The choice rests on that reasoning, not on a score difference this benchmark cannot measure.
 - **Next:** the benchmark is saturated. Before comparing fusion methods (RRF), expand it with more documents, distractor passages and harder questions; otherwise every method will score 1.000.
+
+### Expanded benchmark and RRF
+
+**Benchmark first.** The 14-question set had saturated, with every method at 1.000. It was expanded to 30 questions over 8 documents and **frozen before RRF was implemented**, so the new questions could not be tailored to any method. The four new documents (springs, lubrication and tooling, corrosion, quality records) reuse the existing vocabulary on purpose (fatigue, aging, inspection, lot, surface) to act as distractors.
+
+Method comparison (30 questions):
+
+| Method | hit@1 | hit@3 | recall@3 | MRR@3 |
+|---|---|---|---|---|
+| BM25 only (alpha 0) | **0.967** | 1.000 | 0.989 | **0.983** |
+| Dense only (alpha 1) | 0.800 | 0.967 | 0.922 | 0.872 |
+| Weighted sum, alpha 0.5 (default) | 0.933 | 1.000 | 0.989 | 0.967 |
+| RRF, k=60 | 0.900 | 0.967 | 0.956 | 0.933 |
+
+By category (k=1, default): keyword 1.000 · distractor 1.000 · multi recall 0.444 (one chunk cannot hold evidence from two documents) · **paraphrase 0.667**.
+
+**Findings**
+
+- **Fusion with a weak retriever hurts.** The hashing embedder is a bag of words with collisions (dense only: 0.800). Blending it in, by either method, scores below BM25 alone.
+- **RRF did worse than the weighted sum here.** RRF is robust to *score scale*, not to *retriever quality*: it gives the weak retriever an equal vote and discards how confident each retriever was. Worked example, q11:
+
+  | Chunk | dense rank | BM25 rank | RRF = 1/(60+r₁) + 1/(60+r₂) |
+  |---|---|---|---|
+  | correct (pressure cycling tests) | 3 (cos 0.197) | **1** (BM25 7.39) | 0.03227 |
+  | distractor (fatigue performance) | **1** (cos 0.281) | 3 (BM25 4.74) | 0.03227 |
+
+  The scores tie exactly, and the tie is broken by chunk order. BM25's large margin (7.39 vs 4.74) is invisible to RRF.
+- **Sensitivity (analysis only, not used to pick defaults):** RRF gets worse as the dense weight rises (alpha 0.2: 0.933 → 0.7: 0.833), and `rrf_k` between 10 and 100 makes no difference.
+- **Paraphrase is the real gap** (q22 "rust in the sea" vs "oxide film … seawater", q24 "passivation" vs "passivated"). No lexical method and no bag-of-words embedder can bridge synonyms. That is the job of a real embedding model, query rewriting (step 7) or reranking (step 6).
+
+**Decision.** The defaults stay as they are (weighted, alpha 0.5). Switching to BM25 only, or to alpha 0.3, would be tuning on the test set, and the dense slot is reserved for a real embedding model. RRF stays available as `--fusion rrf`; it should be re-evaluated once the dense retriever is comparable in quality to BM25, which is the setting where RRF is usually recommended.
