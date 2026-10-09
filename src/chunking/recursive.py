@@ -29,7 +29,7 @@ class RecursiveChunker:
         if not text.strip():
             return []
 
-        normalized = re.sub(r"\s+", " ", text).strip()
+        normalized = self._normalize(text)
         chunks: List[RecursiveChunk] = []
         start = 0
         while start < len(normalized):
@@ -43,13 +43,32 @@ class RecursiveChunker:
             chunks.append(RecursiveChunk(text=candidate.strip(), source=source, start=start, end=end))
             if end >= len(normalized):
                 break
-            start = max(start + self.chunk_size - self.overlap, start + 1)
+            start = self._next_start(normalized, start, end)
         return [chunk for chunk in chunks if chunk.text]
+
+    @staticmethod
+    def _normalize(text: str) -> str:
+        """Collapse spaces but keep line and paragraph breaks, so the newline
+        separators can still match."""
+        text = re.sub(r"[^\S\n]+", " ", text)
+        text = re.sub(r" *\n *", "\n", text)
+        return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+    def _next_start(self, text: str, start: int, end: int) -> int:
+        # Step back from the actual end, not from start + chunk_size: after a
+        # separator split the chunk is shorter, and the old rule skipped text.
+        candidate = end - self.overlap
+        if candidate <= start:
+            return end
+        # Move forward to the next word boundary so the overlap never starts mid-word.
+        boundary = re.search(r"\s", text[candidate:end])
+        return candidate + boundary.end() if boundary else end
 
     def _find_split(self, text: str) -> int | None:
         for separator in self.separators:
             indexes = [match.start() for match in re.finditer(re.escape(separator), text)]
             if not indexes:
                 continue
-            return max(1, max(indexes))
+            # Split after the separator so a chunk keeps its closing punctuation.
+            return max(indexes) + len(separator)
         return None

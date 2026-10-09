@@ -1,0 +1,7 @@
+Finished diaphragms are inspected for flatness, profile height and edge burrs. A coordinate measuring machine or an optical profiler compares the formed shape against the nominal profile.
+
+Pressure cycling tests verify fatigue performance. The diaphragm is clamped in a fixture and repeatedly pressurised until it reaches the target number of cycles or develops a crack; the cycle count at failure is recorded for each lot.
+
+Surface condition is checked under magnification because scratches and pits act as crack initiation sites. Parts with surface defects deeper than the allowed limit are scrapped rather than reworked.
+
+Material certificates must accompany every lot of strip. The certificate lists chemical composition, tensile strength and hardness, and inspectors compare these values with the purchase specification before the material is released to production.

@@ -1,0 +1,7 @@
+ELGILOY is a cobalt-chromium-nickel-molybdenum alloy that is non-magnetic and highly resistant to corrosion. It is usually supplied as cold-rolled strip or drawn wire, and most of its strength comes from cold work rather than from the annealed condition.
+
+After forming, the alloy is given a low-temperature aging treatment. Aging after cold work raises yield strength and hardness substantially, so parts are normally formed first and aged afterwards. Forming after aging is avoided because the hardened material has little remaining ductility.
+
+HAVAR is a cobalt-based alloy with a composition similar to ELGILOY. It is commonly rolled into very thin foil and is valued where a thin sheet must hold pressure at elevated temperature, such as pressure windows and target foils.
+
+Heat treatment must be done in a protective atmosphere or vacuum. Oxidation during aging discolours the surface and can leave a scale layer that reduces fatigue life in thin sections.

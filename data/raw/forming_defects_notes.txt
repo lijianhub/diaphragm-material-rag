@@ -1,0 +1,7 @@
+Wrinkling appears when compressive hoop stress builds up in the flange of the blank. It is controlled by increasing blank holder force or by adding draw beads that restrain material flow.
+
+Tearing is the opposite failure: the sheet is stretched beyond its forming limit, usually near a tight radius or at the bottom of a deep profile. Larger radii, better lubrication and a lower blank holder force reduce the risk of tearing.
+
+Springback is the elastic recovery of the part after the tooling is released. High-strength cobalt alloys show more springback than mild steel, so dies are often compensated by over-forming the profile by a small angle.
+
+Excessive thinning concentrates stress in a diaphragm and shortens its fatigue life. Thickness is usually checked at several radial positions after forming, and parts that thin beyond the drawing limit are rejected.

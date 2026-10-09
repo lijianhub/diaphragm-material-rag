@@ -14,13 +14,14 @@ class Chunk:
 
 class FixedSizeChunker:
     def __init__(self, chunk_size: int = 200, overlap: int = 0):
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        if not 0 <= overlap < chunk_size:
+            raise ValueError("overlap must be non-negative and smaller than chunk_size")
         self.chunk_size = chunk_size
         self.overlap = overlap
 
     def chunk(self, text: str, source: str = "document") -> List[Chunk]:
-        if self.chunk_size <= 0:
-            raise ValueError("chunk_size must be positive")
-
         if len(text) <= self.chunk_size:
             return [Chunk(text=text, source=source, start=0, end=len(text))]
 
