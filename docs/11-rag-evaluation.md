@@ -165,3 +165,26 @@ By category, hit@1:
 - **The benchmark is close to saturation again** (1.000 at hit@1). Before tuning anything else on top of this model, it needs harder questions, including ones over the DOCX, XLSX and HTML sources added in the ingestion step.
 
 **Decision.** The default embedder stays `simple-hash`, because tests and the default demo must run offline. The recommended setting for real use is `--embedder st:sentence-transformers/all-MiniLM-L6-v2` locally, or `bedrock:amazon.titan-embed-text-v2:0` on AWS (not yet benchmarked here, since that needs AWS credentials).
+
+### Benchmark v3 and reranking
+
+**Benchmark first, again.** With a real embedding model the 30-question set had saturated (hit@1 1.000). It was expanded to **45 questions** and its corpus widened to every tracked sample format (txt, md, html, csv: 11 documents, 40 chunks) through `evaluation.benchmark_corpus()`, and frozen **before** reranking was implemented. The 15 new questions cover the Markdown procedure and HTML FAQ, informal phrasing ("How long do we have to send back a damaged coil?"), more distractors and two more multi-document questions. No questions were written for the CSV table, because its facts repeat the notes, and the evidence-phrase scoring cannot yet express "either source is correct".
+
+Baseline on v3 (hit@1):
+
+| Method | Hashing | MiniLM |
+|---|---|---|
+| BM25 only | 0.933 | 0.933 |
+| Dense only | 0.689 | 0.844 |
+| Weighted 0.5 (default) | 0.889 | 0.933 |
+| RRF | 0.822 | 0.933 |
+
+The benchmark discriminates again, and paraphrase (0.58–0.92) is again the weakest category.
+
+**Reranking** (`cross-encoder/ms-marco-MiniLM-L-6-v2`, top 20 candidates) brings every first stage to the same hit@1 = 0.933 / MRR@3 = 0.952: a large gain for weak first stages (hashing dense 0.689 → 0.911, hashing weighted 0.889 → 0.933), no gain over the MiniLM hybrid (0.933 → 0.933), at about 75–110 ms per query instead of 2–10 ms. Details and analysis are in [08-reranking.md](08-reranking.md).
+
+**Duplicate collapsing** (`dedupe_overlaps`) has no effect on v3 (one fragment in 40 chunks). The first implementation treated any overlap as a duplicate and dropped hit@1 to 0.422, because adjacent chunks always share the 50-character overlap border. The fixed rule requires the overlap to cover at least half of the shorter chunk.
+
+**Still missed by every configuration:** q33, "Can the parts be taken out into the air straight after aging?" (evidence: "cool the parts in the furnace atmosphere before exposing them to air"). The evidence sits in a valid chunk, so this is a genuine paraphrase failure. It is a candidate for query rewriting (next step) or a domain-tuned reranker.
+
+**Decision.** Defaults are unchanged: weighted hybrid, no reranker, no dedupe.

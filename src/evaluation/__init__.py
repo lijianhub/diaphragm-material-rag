@@ -1,8 +1,10 @@
-from .dataset import EvalExample, load_dataset
+from .dataset import BENCHMARK_SUFFIXES, EvalExample, benchmark_corpus, load_dataset
 from .evaluator import CategoryScore, EvalReport, QuestionResult, evaluate_retrieval, match_evidence
 from .metrics import hit_at_k, recall_at_k, reciprocal_rank
 
 __all__ = [
+    "BENCHMARK_SUFFIXES",
+    "benchmark_corpus",
     "CategoryScore",
     "EvalExample",
     "EvalReport",

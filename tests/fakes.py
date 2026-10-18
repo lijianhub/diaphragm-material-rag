@@ -38,3 +38,35 @@ class FakeBedrockClient:
                 return payload
 
         return {"body": Body()}
+
+
+class FakeCrossEncoder:
+    """Stands in for sentence_transformers.CrossEncoder: scores a (query, passage) pair by
+    how many query words the passage contains, and records every batch it is given."""
+
+    def __init__(self, preferred=None):
+        self.calls = []
+        self.preferred = preferred  # a phrase this "model" judges highly relevant
+
+    def predict(self, pairs, batch_size, show_progress_bar):
+        self.calls.append(list(pairs))
+        scores = []
+        for query, passage in pairs:
+            score = float(sum(word in passage.lower() for word in query.lower().split()))
+            if self.preferred and self.preferred in passage.lower():
+                score += 100.0
+            scores.append(score)
+        return scores
+
+
+class FakeBedrockAgentClient:
+    """Records rerank requests and returns results out of order, as the real API may."""
+
+    def __init__(self, scores):
+        self.scores = scores
+        self.requests = []
+
+    def rerank(self, queries, sources, rerankingConfiguration):
+        self.requests.append({"queries": queries, "sources": sources, "config": rerankingConfiguration})
+        ranked = sorted(range(len(sources)), key=lambda i: self.scores[i], reverse=True)
+        return {"results": [{"index": i, "relevanceScore": self.scores[i]} for i in ranked]}

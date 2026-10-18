@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Union
 
+# Tracked, redistributable sample formats. The private PDF in data/raw is git-ignored
+# and excluded, so every clone evaluates exactly the same corpus.
+BENCHMARK_SUFFIXES = (".txt", ".md", ".html", ".csv")
+
 
 @dataclass
 class EvalExample:
@@ -41,3 +45,8 @@ def load_dataset(questions_path: Union[str, Path], ground_truth_path: Union[str,
             )
         )
     return examples
+
+
+def benchmark_corpus(raw_dir: Union[str, Path]) -> List[Path]:
+    """The files the benchmark is evaluated on: tracked samples only, in a stable order."""
+    return sorted(p for p in Path(raw_dir).iterdir() if p.is_file() and p.suffix.lower() in BENCHMARK_SUFFIXES)

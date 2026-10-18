@@ -25,6 +25,7 @@ if str(SRC_DIR) not in sys.path:
 
 from embedding import create_embedder
 from ingestion.loader import Document, ingest
+from reranking import create_reranker
 from retrieval.index import MANIFEST_FILE, SearchIndex
 from vectorstore import STORE_KINDS
 
@@ -47,6 +48,8 @@ def main() -> None:
         default="simple-hash",
         help="embedder for a NEW index: simple-hash | st:<model> | bedrock:<model>[@dims]; an existing index keeps its own",
     )
+    parser.add_argument("--reranker", default=None, help="reranker to record in the index, e.g. ce:cross-encoder/ms-marco-MiniLM-L-6-v2")
+    parser.add_argument("--dedupe", action=argparse.BooleanOptionalAction, default=None, help="record whether to collapse overlapping chunks")
     parser.add_argument("--rebuild", action="store_true", help="delete the existing index and build from scratch")
     args = parser.parse_args()
 
@@ -60,6 +63,11 @@ def main() -> None:
     else:
         index = SearchIndex(embedder=create_embedder(args.embedder), store=args.store)
         print(f"creating new index (store={args.store}, embedder={index.embedder.name})")
+
+    if args.reranker:
+        index.reranker = create_reranker(args.reranker)
+    if args.dedupe is not None:
+        index.dedupe_overlaps = args.dedupe
 
     started = time.perf_counter()
     result = ingest(args.source)

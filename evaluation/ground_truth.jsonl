@@ -28,3 +28,18 @@
 {"id": "q28", "answer": "Excessive thinning, surface scratches and pits, and oxide scale from heat treatment.", "evidence": ["excessive thinning concentrates stress", "scratches and pits act as crack initiation sites", "reduces fatigue life in thin sections"]}
 {"id": "q29", "answer": "The spring rate is measured on a load tester.", "evidence": ["spring rate is measured on a load tester"]}
 {"id": "q30", "answer": "They show more springback than mild steel and resist relaxation better than stainless steel.", "evidence": ["show more springback than mild steel", "resist relaxation better than stainless steel"]}
+{"id": "q31", "answer": "On clean fixtures that do not touch the active diaphragm area.", "evidence": ["load parts on clean fixtures that do not touch the active diaphragm area"]}
+{"id": "q32", "answer": "On the lot traveller, so the heat treatment can be traced.", "evidence": ["record the furnace run number on the lot traveller"]}
+{"id": "q33", "answer": "No; cool them in the furnace atmosphere first.", "evidence": ["cool the parts in the furnace atmosphere before exposing them to air"]}
+{"id": "q34", "answer": "Cold-rolled temper.", "evidence": ["cold-rolled temper is required for diaphragm forming"]}
+{"id": "q35", "answer": "Thirty days from delivery.", "evidence": ["returned within thirty days of delivery"]}
+{"id": "q36", "answer": "Alloy, thickness, width and temper.", "evidence": ["ordered by alloy, thickness, width and temper"]}
+{"id": "q37", "answer": "A thin chromium-rich oxide film protects them.", "evidence": ["thin chromium-rich oxide film"]}
+{"id": "q38", "answer": "It suggests overload.", "evidence": ["rough, fibrous surface suggests overload"]}
+{"id": "q39", "answer": "Hard coatings such as titanium nitride on the punch and die.", "evidence": ["hard coatings on the punch and die, such as titanium nitride"]}
+{"id": "q40", "answer": "Wire diameter, with a micrometer.", "evidence": ["wire diameter is checked with a micrometer"]}
+{"id": "q41", "answer": "The furnace run number on the lot traveller, and the lot number linking parts to coil, press and heat treatment run.", "evidence": ["record the furnace run number on the lot traveller", "links the finished diaphragms to the strip coil, the forming press and the heat treatment run"]}
+{"id": "q42", "answer": "They are scrapped rather than reworked.", "evidence": ["parts with surface defects deeper than the allowed limit are scrapped rather than reworked"]}
+{"id": "q43", "answer": "It leads to galling and scoring.", "evidence": ["too little leads to galling and scoring"]}
+{"id": "q44", "answer": "A material certificate, which inspectors compare with the purchase specification.", "evidence": ["each coil ships with a material certificate", "inspectors compare these values with the purchase specification"]}
+{"id": "q45", "answer": "High-strength parts absorbing hydrogen during plating or cathodic protection.", "evidence": ["high-strength metal parts absorb hydrogen during plating or cathodic protection"]}

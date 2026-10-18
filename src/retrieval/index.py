@@ -10,6 +10,7 @@ from chunking import RecursiveChunker
 from embedding import SimpleEmbedder, create_embedder, query_vector
 from ingestion.loader import Document
 from ingestion.parser import Section
+from reranking import create_reranker
 from tokenization import tokenize
 from vectorstore import ChunkRecord, VectorStore, create_store, load_store
 
@@ -69,6 +70,9 @@ class SearchIndex:
     Querying: the store returns the ``dense_candidates`` nearest chunks; BM25
     scores every chunk; the two are fused (weighted sum or RRF). Chunks outside
     the dense candidate set get a dense score of 0, as with a real ANN index.
+    Optionally, ``dedupe_overlaps`` drops results that overlap a better-ranked
+    chunk of the same section, and a ``reranker`` reorders the top
+    ``rerank_depth`` candidates by scoring each (query, passage) pair jointly.
     """
 
     def __init__(
@@ -82,6 +86,9 @@ class SearchIndex:
         fusion: str = "weighted",
         rrf_k: int = 60,
         dense_candidates: int = 100,
+        reranker=None,
+        rerank_depth: int = 20,
+        dedupe_overlaps: bool = False,
     ):
         if lexical not in LEXICAL_SCORERS:
             raise ValueError(f"lexical must be one of {LEXICAL_SCORERS}")
@@ -96,6 +103,9 @@ class SearchIndex:
         self.fusion = fusion
         self.rrf_k = rrf_k
         self.dense_candidates = dense_candidates
+        self.reranker = reranker
+        self.rerank_depth = rerank_depth
+        self.dedupe_overlaps = dedupe_overlaps
         self._doc_hashes: Dict[str, str] = {}
         self._bm25: Optional[BM25] = None
         self._records: Optional[List[ChunkRecord]] = None
@@ -201,7 +211,10 @@ class SearchIndex:
                 "fusion": self.fusion,
                 "rrf_k": self.rrf_k,
                 "dense_candidates": self.dense_candidates,
+                "rerank_depth": self.rerank_depth,
+                "dedupe_overlaps": self.dedupe_overlaps,
             },
+            "reranker": getattr(self.reranker, "name", None),
             "documents": self._doc_hashes,
         }
 
@@ -211,7 +224,7 @@ class SearchIndex:
         (directory / MANIFEST_FILE).write_text(json.dumps(self._manifest(), indent=2), encoding="utf-8")
 
     @classmethod
-    def load(cls, directory: Union[str, Path], embedder=None, chunker=None, **search_overrides) -> "SearchIndex":
+    def load(cls, directory: Union[str, Path], embedder=None, chunker=None, reranker=None, **search_overrides) -> "SearchIndex":
         directory = Path(directory)
         manifest_path = directory / MANIFEST_FILE
         if not manifest_path.exists():
@@ -233,8 +246,10 @@ class SearchIndex:
             spec = manifest["chunker"]
             chunker = RecursiveChunker(chunk_size=spec["chunk_size"], overlap=spec["overlap"])
 
+        if reranker is None and manifest.get("reranker"):
+            reranker = create_reranker(manifest["reranker"])  # query-time model, rebuilt by name
         options = {**manifest["search"], **search_overrides}
-        index = cls(embedder=embedder, chunker=chunker, store=load_store(directory / STORE_DIR), **options)
+        index = cls(embedder=embedder, chunker=chunker, store=load_store(directory / STORE_DIR), reranker=reranker, **options)
         index._doc_hashes = dict(manifest["documents"])
         return index
 
@@ -283,15 +298,57 @@ class SearchIndex:
             scores = combine_scores(dense, lexical, weight)
 
         # Rank by position so duplicate chunk texts keep their own source and offsets.
-        ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
-        return [
-            SearchResult(
-                text=records[i].text,
-                source=records[i].source,
-                start=records[i].start,
-                end=records[i].end,
-                score=scores[i],
-                metadata=dict(records[i].metadata),
-            )
-            for i in ranked
-        ]
+        order = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+        needed = self.rerank_depth if self.reranker is not None else top_k
+        candidates = self._dedupe(order, records, needed) if self.dedupe_overlaps else order[:needed]
+
+        if self.reranker is None:
+            return [self._result(records[i], scores[i]) for i in candidates[:top_k]]
+
+        rerank_scores = self.reranker.score(query, [records[i].text for i in candidates])
+        reranked = sorted(zip(candidates, rerank_scores), key=lambda pair: pair[1], reverse=True)[:top_k]
+        return [self._result(records[i], score, retrieval_score=scores[i]) for i, score in reranked]
+
+    @staticmethod
+    def _result(record: ChunkRecord, score: float, retrieval_score: Optional[float] = None) -> SearchResult:
+        metadata = dict(record.metadata)
+        if retrieval_score is not None:
+            metadata["retrieval_score"] = retrieval_score  # first-stage score, kept for debugging
+        return SearchResult(text=record.text, source=record.source, start=record.start, end=record.end, score=score, metadata=metadata)
+
+    @staticmethod
+    def _is_duplicate(a: ChunkRecord, b: ChunkRecord) -> bool:
+        """Two chunks of the same section are duplicates when their overlap covers at least
+        half of the shorter one. Neighbouring chunks share only the configured overlap
+        (a small border) and stay distinct; an overlap fragment lies (almost) entirely
+        inside a full chunk and is a duplicate."""
+        if a.doc_id != b.doc_id or a.metadata.get("section") != b.metadata.get("section"):
+            return False
+        shared = min(a.end, b.end) - max(a.start, b.start)
+        shorter = min(a.end - a.start, b.end - b.start)
+        return shared > 0 and shared * 2 >= shorter
+
+    @classmethod
+    def _dedupe(cls, order: List[int], records: List[ChunkRecord], limit: int) -> List[int]:
+        """Collapse duplicate chunks (see ``_is_duplicate``) into one result.
+
+        The short overlap fragment often outranks the full chunk that contains it
+        (shorter text scores higher on BM25 and cosine), so each group keeps the best
+        rank position but the longest span. The whole ranking is scanned because the
+        longer chunk can rank below the fragment.
+        """
+        kept: List[int] = []
+        for i in order:
+            for slot, j in enumerate(kept):
+                if cls._is_duplicate(records[i], records[j]):
+                    if records[i].end - records[i].start > records[j].end - records[j].start:
+                        kept[slot] = i  # same rank position, more context
+                    break
+            else:
+                kept.append(i)
+        # A longer chunk swapped in above may duplicate a second kept fragment; keep the first.
+        result: List[int] = []
+        for i in kept:
+            if not any(cls._is_duplicate(records[i], records[j]) for j in result):
+                result.append(i)
+        return result[:limit]

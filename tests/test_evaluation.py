@@ -3,7 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from evaluation import evaluate_retrieval, hit_at_k, load_dataset, match_evidence, recall_at_k, reciprocal_rank
+from evaluation import benchmark_corpus, evaluate_retrieval, hit_at_k, load_dataset, match_evidence, recall_at_k, reciprocal_rank
+from ingestion.loader import load_documents
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -76,7 +77,9 @@ def test_evaluate_retrieval_aggregates_per_question_scores(tmp_path):
 
 
 def test_bundled_ground_truth_evidence_exists_in_sample_corpus():
-    corpus = " ".join(path.read_text(encoding="utf-8") for path in sorted((REPO_ROOT / "data" / "raw").glob("*.txt")))
+    # Check against parsed text (HTML tags removed, CSV rows labelled), which is what gets indexed.
+    documents = load_documents(benchmark_corpus(REPO_ROOT / "data" / "raw"))
+    corpus = " ".join(section.text for document in documents for section in document.sections)
     examples = load_dataset(REPO_ROOT / "evaluation" / "questions.jsonl", REPO_ROOT / "evaluation" / "ground_truth.jsonl")
 
     for example in examples:
@@ -110,3 +113,10 @@ def test_category_defaults_to_general(tmp_path):
     truth.write_text(json.dumps({"id": "a", "evidence": ["x"]}), encoding="utf-8")
 
     assert load_dataset(questions, truth)[0].category == "general"
+
+
+def test_benchmark_corpus_uses_only_tracked_sample_formats(tmp_path):
+    for name in ["notes.txt", "guide.md", "faq.html", "rows.csv", "private.pdf", "spec.docx"]:
+        (tmp_path / name).write_text("x", encoding="utf-8")
+
+    assert [p.name for p in benchmark_corpus(tmp_path)] == ["faq.html", "guide.md", "notes.txt", "rows.csv"]

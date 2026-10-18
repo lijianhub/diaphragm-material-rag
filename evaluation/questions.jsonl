@@ -28,3 +28,18 @@
 {"id": "q28", "category": "multi", "question": "Which factors shorten the fatigue life of a diaphragm?"}
 {"id": "q29", "category": "paraphrase", "question": "How is the stiffness of a coiled spring checked?"}
 {"id": "q30", "category": "multi", "question": "How do cobalt alloys behave differently from ordinary steels?"}
+{"id": "q31", "category": "paraphrase", "question": "How should parts be placed on the fixtures for aging?"}
+{"id": "q32", "category": "distractor", "question": "Where is the furnace run number recorded?"}
+{"id": "q33", "category": "paraphrase", "question": "Can the parts be taken out into the air straight after aging?"}
+{"id": "q34", "category": "keyword", "question": "What temper must strip have for diaphragm forming?"}
+{"id": "q35", "category": "paraphrase", "question": "How long do we have to send back a damaged coil?"}
+{"id": "q36", "category": "keyword", "question": "Which details are needed to order strip?"}
+{"id": "q37", "category": "paraphrase", "question": "Why don't these alloys rust in the sea?"}
+{"id": "q38", "category": "distractor", "question": "What does a rough, fibrous fracture surface tell you?"}
+{"id": "q39", "category": "paraphrase", "question": "What gets coated on the punch to stop material sticking to it?"}
+{"id": "q40", "category": "distractor", "question": "What is measured at the start of each coil batch of wire?"}
+{"id": "q41", "category": "multi", "question": "What has to be recorded so a part's heat treatment can be traced?"}
+{"id": "q42", "category": "paraphrase", "question": "What happens to parts with deep scratches?"}
+{"id": "q43", "category": "distractor", "question": "Why is too little lubricant a problem?"}
+{"id": "q44", "category": "multi", "question": "What does the strip supplier send with each coil, and what do inspectors do with it?"}
+{"id": "q45", "category": "keyword", "question": "What causes hydrogen embrittlement?"}

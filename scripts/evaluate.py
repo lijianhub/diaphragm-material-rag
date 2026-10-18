@@ -20,8 +20,9 @@ if str(SRC_DIR) not in sys.path:
 
 from chunking import RecursiveChunker
 from embedding import create_embedder
-from evaluation import evaluate_retrieval, load_dataset
+from evaluation import benchmark_corpus, evaluate_retrieval, load_dataset
 from ingestion.loader import load_documents
+from reranking import create_reranker
 from retrieval.index import FUSION_METHODS, LEXICAL_SCORERS, SearchIndex
 from vectorstore import STORE_KINDS
 
@@ -39,14 +40,17 @@ def main() -> None:
         default="simple-hash",
         help="simple-hash | st:<hugging-face model> | bedrock:<model>[@dims], e.g. st:sentence-transformers/all-MiniLM-L6-v2",
     )
+    parser.add_argument("--reranker", default=None, help="second-stage reranker, e.g. ce:cross-encoder/ms-marco-MiniLM-L-6-v2")
+    parser.add_argument("--rerank-depth", type=int, default=20, help="first-stage candidates passed to the reranker")
+    parser.add_argument("--dedupe", action=argparse.BooleanOptionalAction, default=False, help="collapse overlapping chunks of the same section")
     parser.add_argument("--store", choices=STORE_KINDS, default="memory", help="vector store backend")
     parser.add_argument("--chunk-size", type=int, default=300)
     parser.add_argument("--overlap", type=int, default=50)
     parser.add_argument("--output", type=Path, default=REPO_ROOT / "evaluation" / "results.jsonl")
     args = parser.parse_args()
 
-    # Only the tracked *.txt samples, so scores are reproducible on every clone.
-    corpus = sorted((REPO_ROOT / "data" / "raw").glob("*.txt"))
+    # Only the tracked sample files (txt, md, html, csv), so scores are reproducible on every clone.
+    corpus = benchmark_corpus(REPO_ROOT / "data" / "raw")
     index = SearchIndex(
         embedder=create_embedder(args.embedder),
         chunker=RecursiveChunker(chunk_size=args.chunk_size, overlap=args.overlap),
@@ -56,13 +60,16 @@ def main() -> None:
         fusion=args.fusion,
         rrf_k=args.rrf_k,
         store=args.store,
+        reranker=create_reranker(args.reranker) if args.reranker else None,
+        rerank_depth=args.rerank_depth,
+        dedupe_overlaps=args.dedupe,
     )
     index.add_documents(load_documents(corpus))
 
     examples = load_dataset(REPO_ROOT / "evaluation" / "questions.jsonl", REPO_ROOT / "evaluation" / "ground_truth.jsonl")
     report = evaluate_retrieval(examples, lambda question, k: [r.text for r in index.search(question, top_k=k)], k=args.k)
 
-    print(f"documents={len(corpus)} chunks={len(index)} questions={len(examples)} k={report.k} alpha={args.alpha} lexical={args.lexical} stem={args.stem} fusion={args.fusion} store={args.store} embedder={index.embedder.name}")
+    print(f"documents={len(corpus)} chunks={len(index)} questions={len(examples)} k={report.k} alpha={args.alpha} lexical={args.lexical} stem={args.stem} fusion={args.fusion} store={args.store} embedder={index.embedder.name} reranker={args.reranker} dedupe={args.dedupe}")
     print(f"hit@{report.k}={report.hit_rate:.3f}  recall@{report.k}={report.recall:.3f}  mrr={report.mrr:.3f}")
     for category, score in report.by_category().items():
         print(f"  {category:<11} n={score.count:<3} hit={score.hit_rate:.3f}  recall={score.recall:.3f}  mrr={score.mrr:.3f}")
