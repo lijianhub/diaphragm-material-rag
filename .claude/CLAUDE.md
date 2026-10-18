@@ -57,7 +57,7 @@ The pipeline is ingestion → chunking → embedding → retrieval → generatio
 Many files exist only as zero-byte placeholders for the planned learning path. Check a file's contents before assuming it implements anything:
 
 - `src/`: `agent/`, `api/`, `query/`, `vectorstore/pgvector_store.py`, `generation/claude.py`, `generation/prompt.py`, `config.py`
-- `scripts/` other than `index.py`, `query.py` and `evaluate.py`; `experiments/02_*`–`11_*`; `notebooks/`; `docs/*.md` other than `02-document-ingestion.md`, `05-embeddings.md`, `06-vector-database.md` and `11-rag-evaluation.md`
+- `scripts/` other than `index.py`, `query.py` and `evaluate.py`; `experiments/02_*`–`11_*`; `notebooks/`; `docs/*.md` other than `01`–`06` and `11-rag-evaluation.md`
 
 Each `docs/NN-*.md` topic is meant to pair with an `experiments/NN_*` directory and a `src/` module. When you implement a stage, keep that numbering consistent.
 
