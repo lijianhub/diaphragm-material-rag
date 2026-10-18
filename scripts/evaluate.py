@@ -19,6 +19,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from chunking import RecursiveChunker
+from embedding import create_embedder
 from evaluation import evaluate_retrieval, load_dataset
 from ingestion.loader import load_documents
 from retrieval.index import FUSION_METHODS, LEXICAL_SCORERS, SearchIndex
@@ -33,6 +34,11 @@ def main() -> None:
     parser.add_argument("--stem", action=argparse.BooleanOptionalAction, default=True, help="stem terms for lexical scoring")
     parser.add_argument("--fusion", choices=FUSION_METHODS, default="weighted", help="how dense and lexical rankings are combined")
     parser.add_argument("--rrf-k", type=int, default=60, help="RRF rank constant")
+    parser.add_argument(
+        "--embedder",
+        default="simple-hash",
+        help="simple-hash | st:<hugging-face model> | bedrock:<model>[@dims], e.g. st:sentence-transformers/all-MiniLM-L6-v2",
+    )
     parser.add_argument("--store", choices=STORE_KINDS, default="memory", help="vector store backend")
     parser.add_argument("--chunk-size", type=int, default=300)
     parser.add_argument("--overlap", type=int, default=50)
@@ -42,6 +48,7 @@ def main() -> None:
     # Only the tracked *.txt samples, so scores are reproducible on every clone.
     corpus = sorted((REPO_ROOT / "data" / "raw").glob("*.txt"))
     index = SearchIndex(
+        embedder=create_embedder(args.embedder),
         chunker=RecursiveChunker(chunk_size=args.chunk_size, overlap=args.overlap),
         alpha=args.alpha,
         lexical=args.lexical,
@@ -55,7 +62,7 @@ def main() -> None:
     examples = load_dataset(REPO_ROOT / "evaluation" / "questions.jsonl", REPO_ROOT / "evaluation" / "ground_truth.jsonl")
     report = evaluate_retrieval(examples, lambda question, k: [r.text for r in index.search(question, top_k=k)], k=args.k)
 
-    print(f"documents={len(corpus)} chunks={len(index)} questions={len(examples)} k={report.k} alpha={args.alpha} lexical={args.lexical} stem={args.stem} fusion={args.fusion} store={args.store}")
+    print(f"documents={len(corpus)} chunks={len(index)} questions={len(examples)} k={report.k} alpha={args.alpha} lexical={args.lexical} stem={args.stem} fusion={args.fusion} store={args.store} embedder={index.embedder.name}")
     print(f"hit@{report.k}={report.hit_rate:.3f}  recall@{report.k}={report.recall:.3f}  mrr={report.mrr:.3f}")
     for category, score in report.by_category().items():
         print(f"  {category:<11} n={score.count:<3} hit={score.hit_rate:.3f}  recall={score.recall:.3f}  mrr={score.mrr:.3f}")

@@ -109,3 +109,28 @@ def test_sync_keeps_documents_listed_in_keep():
 
     assert stats.removed == 1
     assert set(index.document_ids()) == {"forming.txt", "quality.txt"}
+
+
+def test_queries_use_the_query_side_of_asymmetric_embedders():
+    from embedding import SentenceTransformerEmbedder
+    from tests.fakes import FakeSentenceModel
+
+    model = FakeSentenceModel()
+    index = SearchIndex(embedder=SentenceTransformerEmbedder("intfloat/e5-small-v2", model=model, query_prefix="query: ", passage_prefix="passage: "))
+    index.sync(DOCS)
+
+    index.search("springback", top_k=1)
+
+    assert all(text.startswith("passage: ") for text in model.calls[0]["texts"])
+    assert model.calls[-1]["texts"] == ["query: springback"]
+
+
+def test_load_rebuilds_the_embedder_named_in_the_manifest(tmp_path):
+    index = SearchIndex(embedder=SimpleEmbedder(dim=256))
+    index.sync(DOCS)
+    index.save(tmp_path / "index")
+
+    loaded = SearchIndex.load(tmp_path / "index")
+
+    assert loaded.embedder.name == "simple-hash-256"
+    assert _ranked(loaded, "springback") == _ranked(index, "springback")

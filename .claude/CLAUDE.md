@@ -16,6 +16,7 @@ pytest tests/test_chunking.py::test_name -q   # one test
 python scripts/index.py [--store faiss] [--rebuild]   # build/sync the persistent index data/raw -> data/index
 python scripts/query.py "How is springback compensated?"   # retrieve + answer from data/index (in-memory fallback)
 python scripts/evaluate.py --k 3 --alpha 0.5  # retrieval metrics; writes evaluation/results.jsonl
+python scripts/evaluate.py --embedder st:sentence-transformers/all-MiniLM-L6-v2   # real embedding model
 python experiments/01_naive_rag/run.py        # naive demo: whole documents, no chunking or retrieval
 ```
 
@@ -41,7 +42,7 @@ The pipeline is ingestion → chunking → embedding → retrieval → generatio
 - `ingestion/`: `parser.py` holds one parser per format (txt/json, md, html, pdf, docx, xlsx, csv) behind `parse_file()` → `Parsed(sections, metadata)`; DOCX/XLSX are read with `zipfile` + `xml.etree` (no dependency). A `Section` is a citation unit (PDF page, sheet, heading section) with metadata such as `page`, `sheet` or `heading`. `loader.ingest(paths)` returns `IngestResult(documents, failures, skipped, duplicates)` and never stops at a bad file; `load_documents()` is the strict variant that raises. `Document(source, content, metadata, sections)`; empty `sections` means one section equal to `content`. New formats register via `register_parser`. Tests build PDF/DOCX/XLSX files in code with `tests/file_builders.py`; never commit binary fixtures.
 - `tokenization.py`: the shared `tokenize()` (lowercase, hyphenated terms kept whole, stopwords removed, optional `stem_tokens`). Embedding and lexical scoring must both use it so they agree on what a term is. `stem()` is a light Porter-style suffix stripper; stems are index keys (`verify` → `verifi`), not words. Query and corpus must use the same stemming setting.
 - `chunking/`: `FixedSizeChunker` (character windows with overlap) and `RecursiveChunker` (collapses spaces but keeps line and paragraph breaks, then splits after the last `\n\n`, `\n`, `. ` or ` ` separator). Each chunker returns its own dataclass (`Chunk` / `RecursiveChunk`) with `text, source, start, end`. In `RecursiveChunker`, offsets refer to the normalized text, consecutive chunks never leave gaps, and the overlap always starts on a word boundary.
-- `embedding/embedder.py`: `SimpleEmbedder` uses feature hashing into a fixed `dim` (default 512) of L2-normalized vectors. It is deterministic and offline, and captures word overlap, not meaning.
+- `embedding/`: every embedder has `name`, `dim`, `encode`, `encode_many` and optionally `encode_query`. `create_embedder(name)` builds one from a spec: `simple-hash[-dim]` (`SimpleEmbedder`: offline feature hashing, the default and what tests use; word overlap, not meaning), `st:<hf-model>` (`SentenceTransformerEmbedder`, optional `[local-embeddings]` extra), and `bedrock:<model>[@dims]` (`BedrockEmbedder`: Titan Text Embeddings V2, optional `[aws]` extra; one InvokeModel per text with backoff on throttling). An embedder's `name` is itself a valid spec, so `SearchIndex.load` rebuilds the embedder from the manifest. Queries always go through `embedding.query_vector()`, which uses `encode_query`, so asymmetric models get their query prefix. Tests use the fakes in `tests/fakes.py` and never download models or call AWS; the one real-model test needs `RUN_MODEL_TESTS=1`.
 - `retrieval/dense.py`: `cosine_similarity` and `dense_search`.
 - `retrieval/hybrid.py`: `hybrid_search(query, query_vector, texts, vectors, top_k, alpha)` scores `alpha * cosine + (1 - alpha) * lexical coverage`, both in [0, 1]. The caller embeds the query with the same embedder as the corpus.
 - `retrieval/bm25.py`: `BM25(texts, k1, b, stem_tokens)` with Lucene IDF, which is never negative. `.scores(query)` is unbounded.
@@ -56,13 +57,13 @@ The pipeline is ingestion → chunking → embedding → retrieval → generatio
 Many files exist only as zero-byte placeholders for the planned learning path. Check a file's contents before assuming it implements anything:
 
 - `src/`: `agent/`, `api/`, `query/`, `vectorstore/pgvector_store.py`, `generation/claude.py`, `generation/prompt.py`, `config.py`
-- `scripts/` other than `index.py`, `query.py` and `evaluate.py`; `experiments/02_*`–`11_*`; `notebooks/`; `docs/*.md` other than `02-document-ingestion.md`, `06-vector-database.md` and `11-rag-evaluation.md`
+- `scripts/` other than `index.py`, `query.py` and `evaluate.py`; `experiments/02_*`–`11_*`; `notebooks/`; `docs/*.md` other than `02-document-ingestion.md`, `05-embeddings.md`, `06-vector-database.md` and `11-rag-evaluation.md`
 
 Each `docs/NN-*.md` topic is meant to pair with an `experiments/NN_*` directory and a `src/` module. When you implement a stage, keep that numbering consistent.
 
 ## Conventions
 
-- Optional heavy dependencies (`faiss-cpu`, and later model SDKs) are imported lazily inside the backend that needs them, declared under `[project.optional-dependencies]`, and their tests are skipped when missing. The core install and test suite must work without them.
+- Optional heavy dependencies (`faiss-cpu`, `sentence-transformers`, `boto3`) are imported lazily inside the backend that needs them, declared under `[project.optional-dependencies]`, and their tests are skipped when missing. The core install and test suite must work without them.
 
 - Every module starts with `from __future__ import annotations` and uses `@dataclass` for records with `typing` hints.
 - Tests and the default demo must run offline, with no network or API keys. This is why the embedder is deterministic. Real model or API backends should be added alongside the offline implementation, not replace it. Test-specific rules are in `.claude/rules/testing.md`.

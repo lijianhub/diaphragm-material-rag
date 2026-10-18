@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Union
 
 from chunking import RecursiveChunker
-from embedding.embedder import SimpleEmbedder
+from embedding import SimpleEmbedder, create_embedder, query_vector
 from ingestion.loader import Document
 from ingestion.parser import Section
 from tokenization import tokenize
@@ -222,9 +222,8 @@ class SearchIndex:
 
         built_with = manifest["embedder"]["name"]
         if embedder is None:
-            if not built_with.startswith("simple-hash-"):
-                raise ValueError(f"index was built with embedder {built_with!r}; pass that embedder to load()")
-            embedder = SimpleEmbedder(dim=manifest["embedder"]["dim"])
+            # The manifest name is a spec, so the same model is rebuilt (local or Bedrock).
+            embedder = create_embedder(built_with)
         if _embedder_name(embedder) != built_with:
             raise ValueError(
                 f"index was built with embedder {built_with!r} but {_embedder_name(embedder)!r} was given; "
@@ -264,7 +263,7 @@ class SearchIndex:
         position = {record.id: i for i, record in enumerate(records)}
 
         dense = [0.0] * len(records)
-        for hit in self.store.search(self.embedder.encode(query), top_k=self.dense_candidates):
+        for hit in self.store.search(query_vector(self.embedder, query), top_k=self.dense_candidates):
             dense[position[hit.id]] = hit.score
         lexical = self._lexical_scores(query, texts)
 

@@ -23,6 +23,7 @@ SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from embedding import create_embedder
 from ingestion.loader import Document, ingest
 from retrieval.index import MANIFEST_FILE, SearchIndex
 from vectorstore import STORE_KINDS
@@ -41,6 +42,11 @@ def main() -> None:
     parser.add_argument("--source", type=Path, default=REPO_ROOT / "data" / "raw", help="file or directory to index")
     parser.add_argument("--out", type=Path, default=REPO_ROOT / "data" / "index", help="index directory")
     parser.add_argument("--store", choices=STORE_KINDS, default="memory", help="vector store for a new index")
+    parser.add_argument(
+        "--embedder",
+        default="simple-hash",
+        help="embedder for a NEW index: simple-hash | st:<model> | bedrock:<model>[@dims]; an existing index keeps its own",
+    )
     parser.add_argument("--rebuild", action="store_true", help="delete the existing index and build from scratch")
     args = parser.parse_args()
 
@@ -50,10 +56,10 @@ def main() -> None:
 
     if (args.out / MANIFEST_FILE).exists():
         index = SearchIndex.load(args.out)
-        print(f"loaded index from {args.out} ({len(index)} chunks, store={index.store.kind})")
+        print(f"loaded index from {args.out} ({len(index)} chunks, store={index.store.kind}, embedder={index.embedder.name})")
     else:
-        index = SearchIndex(store=args.store)
-        print(f"creating new index (store={args.store})")
+        index = SearchIndex(embedder=create_embedder(args.embedder), store=args.store)
+        print(f"creating new index (store={args.store}, embedder={index.embedder.name})")
 
     started = time.perf_counter()
     result = ingest(args.source)

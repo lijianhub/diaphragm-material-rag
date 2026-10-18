@@ -133,3 +133,35 @@ By category (k=1, default): keyword 1.000 · distractor 1.000 · multi recall 0.
 - **Paraphrase is the real gap** (q22 "rust in the sea" vs "oxide film … seawater", q24 "passivation" vs "passivated"). No lexical method and no bag-of-words embedder can bridge synonyms. That is the job of a real embedding model, query rewriting (step 7) or reranking (step 6).
 
 **Decision.** The defaults stay as they are (weighted, alpha 0.5). Switching to BM25 only, or to alpha 0.3, would be tuning on the test set, and the dense slot is reserved for a real embedding model. RRF stays available as `--fusion rrf`; it should be re-evaluated once the dense retriever is comparable in quality to BM25, which is the setting where RRF is usually recommended.
+
+### A real embedding model
+
+Changes: `SentenceTransformerEmbedder` (local) and `BedrockEmbedder` (Amazon Titan V2) behind one embedder interface, with `create_embedder(name)` and query-side encoding. The benchmark is the same frozen 30-question set. The model is `sentence-transformers/all-MiniLM-L6-v2` (384 dimensions).
+
+hit@1 / MRR@3:
+
+| Method | simple-hash (bag of words) | all-MiniLM-L6-v2 |
+|---|---|---|
+| BM25 only (alpha 0) | 0.967 / 0.983 | 0.967 / 0.983 (unchanged: no dense part) |
+| Dense only (alpha 1) | 0.800 / 0.872 | **0.933 / 0.961** |
+| Weighted 0.5 (default) | 0.933 / 0.967 | **1.000 / 1.000** |
+| RRF k=60 | 0.900 / 0.933 | 0.967 / 0.983 |
+
+By category, hit@1:
+
+| Method | keyword | paraphrase | distractor | multi |
+|---|---|---|---|---|
+| Dense only, simple-hash | 0.83 | 0.67 | 1.00 | 0.67 |
+| Dense only, MiniLM | 0.94 | **1.00** | 0.67 | 1.00 |
+| Weighted 0.5, MiniLM | 1.00 | **1.00** | 1.00 | 1.00 |
+
+**Findings**
+
+- **The model fixes paraphrase.** Dense-only paraphrase hit@1 goes from 0.67 to 1.00: q22 ("rust in the sea" vs "oxide film … seawater") and q24 ("passivation" vs "passivated") are now found. No lexical method could do this.
+- **Dense alone is not enough.** MiniLM on its own misses a distractor (q19, "cleaned before aging", where aging also appears in the heat-treatment notes) and an exact-term keyword question (q21, "molybdenum … pitting"). BM25 gets both. The two retrievers fail on different questions, which is the case for hybrid search.
+- **Hybrid with a real model is the best configuration measured:** weighted 0.5 reaches hit@1 = MRR = 1.000. alpha = 0.5 was set in step 3, before any real model existed, so this is not a tuned result. Recall@3 is 0.978 because one multi-evidence question does not get all its evidence into the top 3.
+- **RRF, re-evaluated as promised,** improves from 0.900 to 0.967 once the dense retriever is comparable to BM25, which confirms the step-5 diagnosis that RRF needs retrievers of similar quality. It still trails the weighted sum here (it misses q19), so the default stays weighted.
+- **Cost:** loading the model and embedding the 31 chunks took about 33 s on a laptop CPU the first time (most of it model load and download); query embedding is a few milliseconds.
+- **The benchmark is close to saturation again** (1.000 at hit@1). Before tuning anything else on top of this model, it needs harder questions, including ones over the DOCX, XLSX and HTML sources added in the ingestion step.
+
+**Decision.** The default embedder stays `simple-hash`, because tests and the default demo must run offline. The recommended setting for real use is `--embedder st:sentence-transformers/all-MiniLM-L6-v2` locally, or `bedrock:amazon.titan-embed-text-v2:0` on AWS (not yet benchmarked here, since that needs AWS credentials).
