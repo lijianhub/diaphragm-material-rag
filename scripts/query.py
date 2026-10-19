@@ -57,17 +57,21 @@ def main() -> None:
 
     if args.reranker:
         index.reranker = create_reranker(args.reranker)
-    results = index.search(args.question, top_k=args.top_k)
-    if not results:
+    if len(index) == 0:
         sys.exit("The index is empty.")
 
-    answer = RAGPipeline().answer(args.question, [result.text for result in results])
+    # No language model is connected yet, so answers are extractive quotes with citations.
+    answer = RAGPipeline(index, top_k=args.top_k).answer(args.question)
 
     print("Question:", args.question)
-    print("\nAnswer:\n" + answer["answer"])
-    print("\nSources:")
-    for result in results:
-        print(f"- {citation(result)}  score={result.score:.3f}")
+    print("\nAnswer:\n" + answer.text)
+    if answer.invalid_citations:
+        print(f"\n(warning: the answer cites sources that do not exist: {answer.invalid_citations})")
+    print("\nSources (* = cited):")
+    cited = {c.number for c in answer.citations}
+    for number, result in enumerate(answer.sources, start=1):
+        marker = "*" if number in cited else " "
+        print(f"{marker}[{number}] {citation(result)}  score={result.score:.3f}")
 
 
 if __name__ == "__main__":

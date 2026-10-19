@@ -21,10 +21,10 @@ def main() -> None:
 
     print("Question:", question)
     print("\nAnswer:")
-    print(result["answer"])
-    print("\nSources:")
-    for source in result["sources"]:
-        print("-", source)
+    print(result.text)
+    print("\nCited passages:")
+    for citation in result.citations:
+        print(f"- [{citation.number}] {citation.text[:80]}...")
 
 
 if __name__ == "__main__":
