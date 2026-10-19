@@ -269,7 +269,17 @@ class SearchIndex:
         query_terms = tokenize(query, stem_tokens=self.stem_tokens)
         return [lexical_coverage(query_terms, text, self.stem_tokens) for text in texts]
 
-    def search(self, query: str, top_k: int = 3, alpha: Optional[float] = None) -> List[SearchResult]:
+    def term_idf(self, term: str) -> float:
+        """Corpus IDF of a term (BM25's, with this index's stemming), e.g. for query expansion."""
+        if self._bm25 is None:
+            self._bm25 = BM25([record.text for record in self._corpus()], stem_tokens=self.stem_tokens)
+        return self._bm25.idf(term)
+
+    def search(self, query: str, top_k: int = 3, alpha: Optional[float] = None, rerank: bool = True) -> List[SearchResult]:
+        """Hybrid retrieval, then (if configured and ``rerank``) cross-encoder reranking.
+
+        ``rerank=False`` returns the first-stage ranking, which multi-query retrieval
+        fuses before reranking once against the original question."""
         records = self._corpus()
         if not records:
             return []
@@ -299,10 +309,11 @@ class SearchIndex:
 
         # Rank by position so duplicate chunk texts keep their own source and offsets.
         order = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
-        needed = self.rerank_depth if self.reranker is not None else top_k
+        use_reranker = self.reranker is not None and rerank
+        needed = self.rerank_depth if use_reranker else top_k
         candidates = self._dedupe(order, records, needed) if self.dedupe_overlaps else order[:needed]
 
-        if self.reranker is None:
+        if not use_reranker:
             return [self._result(records[i], scores[i]) for i in candidates[:top_k]]
 
         rerank_scores = self.reranker.score(query, [records[i].text for i in candidates])

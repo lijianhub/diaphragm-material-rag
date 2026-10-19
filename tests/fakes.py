@@ -70,3 +70,19 @@ class FakeBedrockAgentClient:
         self.requests.append({"queries": queries, "sources": sources, "config": rerankingConfiguration})
         ranked = sorted(range(len(sources)), key=lambda i: self.scores[i], reverse=True)
         return {"results": [{"index": i, "relevanceScore": self.scores[i]} for i in ranked]}
+
+
+class FakeLLM:
+    """A text-in, text-out stand-in for a language model: returns a scripted reply and
+    records every prompt it was given."""
+
+    def __init__(self, reply="", error=None):
+        self.reply = reply
+        self.error = error
+        self.prompts = []
+
+    def __call__(self, prompt):
+        self.prompts.append(prompt)
+        if self.error:
+            raise self.error
+        return self.reply

@@ -22,6 +22,7 @@ from chunking import RecursiveChunker
 from embedding import create_embedder
 from evaluation import benchmark_corpus, evaluate_retrieval, load_dataset
 from ingestion.loader import load_documents
+from query import decompose, retrieve
 from reranking import create_reranker
 from retrieval.index import FUSION_METHODS, LEXICAL_SCORERS, SearchIndex
 from vectorstore import STORE_KINDS
@@ -43,6 +44,10 @@ def main() -> None:
     parser.add_argument("--reranker", default=None, help="second-stage reranker, e.g. ce:cross-encoder/ms-marco-MiniLM-L-6-v2")
     parser.add_argument("--rerank-depth", type=int, default=20, help="first-stage candidates passed to the reranker")
     parser.add_argument("--dedupe", action=argparse.BooleanOptionalAction, default=False, help="collapse overlapping chunks of the same section")
+    parser.add_argument("--decompose", action="store_true", help="split compound questions and fuse the sub-query rankings")
+    parser.add_argument("--query-fusion", choices=("rrf", "interleave"), default="interleave", help="how sub-query rankings are merged")
+    parser.add_argument("--prf", type=int, default=0, help="pseudo-relevance feedback: number of expansion terms (0 = off)")
+    parser.add_argument("--prf-docs", type=int, default=3, help="first-pass passages used for feedback")
     parser.add_argument("--store", choices=STORE_KINDS, default="memory", help="vector store backend")
     parser.add_argument("--chunk-size", type=int, default=300)
     parser.add_argument("--overlap", type=int, default=50)
@@ -67,9 +72,17 @@ def main() -> None:
     index.add_documents(load_documents(corpus))
 
     examples = load_dataset(REPO_ROOT / "evaluation" / "questions.jsonl", REPO_ROOT / "evaluation" / "ground_truth.jsonl")
-    report = evaluate_retrieval(examples, lambda question, k: [r.text for r in index.search(question, top_k=k)], k=args.k)
+    transforms = [decompose] if args.decompose else []
 
-    print(f"documents={len(corpus)} chunks={len(index)} questions={len(examples)} k={report.k} alpha={args.alpha} lexical={args.lexical} stem={args.stem} fusion={args.fusion} store={args.store} embedder={index.embedder.name} reranker={args.reranker} dedupe={args.dedupe}")
+    def search(question, k):
+        results = retrieve(
+            index, question, top_k=k, transforms=transforms, prf_terms=args.prf, prf_docs=args.prf_docs, fusion=args.query_fusion
+        )
+        return [r.text for r in results]
+
+    report = evaluate_retrieval(examples, search, k=args.k)
+
+    print(f"documents={len(corpus)} chunks={len(index)} questions={len(examples)} k={report.k} alpha={args.alpha} lexical={args.lexical} stem={args.stem} fusion={args.fusion} store={args.store} embedder={index.embedder.name} reranker={args.reranker} dedupe={args.dedupe} decompose={args.decompose} prf={args.prf}")
     print(f"hit@{report.k}={report.hit_rate:.3f}  recall@{report.k}={report.recall:.3f}  mrr={report.mrr:.3f}")
     for category, score in report.by_category().items():
         print(f"  {category:<11} n={score.count:<3} hit={score.hit_rate:.3f}  recall={score.recall:.3f}  mrr={score.mrr:.3f}")

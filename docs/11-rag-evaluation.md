@@ -188,3 +188,14 @@ The benchmark discriminates again, and paraphrase (0.58–0.92) is again the wea
 **Still missed by every configuration:** q33, "Can the parts be taken out into the air straight after aging?" (evidence: "cool the parts in the furnace atmosphere before exposing them to air"). The evidence sits in a valid chunk, so this is a genuine paraphrase failure. It is a candidate for query rewriting (next step) or a domain-tuned reranker.
 
 **Decision.** Defaults are unchanged: weighted hybrid, no reranker, no dedupe.
+
+### Query transformation
+
+On the same frozen v3 benchmark (details in [09-query-transformation.md](09-query-transformation.md)):
+
+- **Pseudo-relevance feedback** caused query drift: hit@1 0.889 → 0.600 (hashing) and 0.933 → 0.689 (MiniLM) with 3 terms, while fixing only two or three paraphrase questions.
+- **Decomposition** only applies to two questions, both already answered, so it leaves scores unchanged when sub-query results are interleaved. With RRF fusion it **lowered** multi-document recall@3 from 0.833 to 0.633, because RRF rewards chunks that every sub-query retrieves rather than each sub-query's best chunk.
+- **With a reranker**, every transformation ends at 0.933, because reranking scores against the original question.
+- **q33 remains unsolved**; LLM multi-query and HyDE rewriting are implemented but not yet measured (no LLM backend yet).
+
+**Decision.** Defaults unchanged; all transformations are opt-in.
