@@ -22,7 +22,7 @@ python experiments/01_naive_rag/run.py        # naive demo: whole documents, no 
 
 Run `scripts/evaluate.py` before and after any change to chunking, embedding or retrieval, and report the metric change. It indexes only the tracked samples returned by `evaluation.benchmark_corpus()` (txt, md, html and csv in `data/raw/`; never the private PDF), so scores are reproducible on every clone. Look at the per-category lines as well as the overall score. Never tune defaults (alpha, k1, rrf_k) to maximize the score on this set, because it is also the test set; justify defaults from first principles and use sweeps only as analysis.
 
-There is no linter or formatter configured, and `Makefile`, `.env.example`, `docker/` and `config/*.yaml` are currently empty.
+There is no linter or formatter configured, and `Makefile`, `.env.example`, `docker/` and `config/*.yaml` are currently empty. `README.md` has a capability status table (implemented and tested / tested with fakes only / planned); keep it accurate when a capability changes status, and never mark something implemented that is only designed.
 
 ## Import layout
 
@@ -59,7 +59,7 @@ The pipeline is ingestion → chunking → embedding → retrieval → generatio
 Many files exist only as zero-byte placeholders for the planned learning path. Check a file's contents before assuming it implements anything:
 
 - `src/`: `agent/`, `api/`, `vectorstore/pgvector_store.py`, `generation/claude.py`, `config.py`
-- `scripts/` other than `index.py`, `query.py` and `evaluate.py`; `experiments/02_*`–`11_*`; `notebooks/`; `docs/*.md` other than `01`–`06`, `08`–`11`
+- `scripts/` other than `index.py`, `query.py` and `evaluate.py`; `experiments/02_*`–`11_*`; `notebooks/`; `docs/*.md` other than `01`–`06`, `08`–`11`, `architecture.md` and `claude-code-workflows.md`
 
 Each `docs/NN-*.md` topic is meant to pair with an `experiments/NN_*` directory and a `src/` module. When you implement a stage, keep that numbering consistent.
 

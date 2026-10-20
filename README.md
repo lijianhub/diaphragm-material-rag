@@ -1,197 +1,158 @@
 # Diaphragm Material RAG
 
-A lightweight retrieval-augmented generation system for engineering knowledge search and question answering. This project is designed to help teams work with structured and unstructured domain documents, including material specifications, engineering notes, and internal reference content.
+A retrieval-augmented generation (RAG) system for engineering documents, built step by step and measured at every step. The domain is diaphragm forming with ELGILOY® and HAVAR® cobalt alloys: specifications, procedures, inspection records and supplier information spread across PDF, Word, Excel, HTML, Markdown and text files.
 
-The initial domain focus is diaphragm forming and metal alloy knowledge for applications involving ELGILOY (R) and HAVAR (R) Co-Cr-Ni-Mo materials. The repository is organized as a practical, extensible RAG foundation that can be adapted to enterprise document retrieval scenarios.
+The goal is a small but complete AI service that is **evaluated, tested and explainable**: every retrieval change is checked against a frozen benchmark, regressions are documented rather than hidden, and the core runs offline with no API keys.
 
-## Overview
+## Status
 
-This project demonstrates a simple but useful enterprise pattern:
-
-- load source documents from local files or directories
-- normalize and parse the content
-- split long documents into searchable chunks
-- encode chunks into vector representations
-- retrieve the most relevant passages for a query
-- synthesize a grounded answer from the retrieved context
-
-This pattern is useful for internal knowledge assistants, technical documentation search, and domain-specific Q&A systems where users need answers grounded in source material.
-
-## Why this project matters
-
-Many organizations store critical information in PDFs, Markdown files, specifications, and internal notes. A RAG workflow helps turn those documents into a searchable knowledge layer that supports faster decision-making and more accurate retrieval.
-
-This repository is intentionally simple and modular so it can be used as:
-
-- a local document Q&A prototype
-- a learning project for RAG architecture
-- a foundation for a production-ready internal knowledge assistant
-- a starting point for enterprise search integrations
+| Capability | Status | Notes |
+|---|---|---|
+| Multi-format ingestion (PDF, DOCX, XLSX, HTML, Markdown, CSV, TXT) with page/sheet/section citations | ✅ Implemented and tested | Standard library parsers; fault-tolerant batch ingestion |
+| Paragraph-aware chunking with overlap | ✅ Implemented and tested | No gaps; overlap starts on word boundaries |
+| Hybrid retrieval: BM25 + dense vectors (weighted sum or RRF) | ✅ Implemented and tested | Light stemming; shared tokenizer |
+| Persistent vector store (in-memory, FAISS) with incremental sync | ✅ Implemented and tested | Content-hash sync; embedder recorded in the manifest |
+| Local embedding model (sentence-transformers) | ✅ Implemented, tested and benchmarked | Optional extra |
+| Cross-encoder reranking and duplicate-chunk collapsing | ✅ Implemented, tested and benchmarked | Optional extra; off by default |
+| Query transformation: decomposition, pseudo-relevance feedback | ✅ Implemented, tested and benchmarked | Opt-in; neither improves the current benchmark |
+| Grounded prompt with numbered sources, citation checking, prompt-injection escaping | ✅ Implemented and tested | |
+| Offline extractive answers with citations | ✅ Implemented and tested | Cannot judge answerability (see limitations) |
+| Retrieval benchmark: 45 questions, 4 categories, hit@k / recall@k / MRR | ✅ Implemented | Frozen before each new method is implemented |
+| Amazon Bedrock embeddings and reranking | 🟡 Implemented, tested with fakes only | Not yet run against a live AWS account |
+| LLM rewriting (multi-query, HyDE) and LLM answers | 🟡 Implemented, tested with fakes only | Waiting for the LLM backend |
+| Anthropic API generation with model and prompt versioning | 🔜 Planned | |
+| Generation evaluation (faithfulness, citations, refusals on unanswerable questions) | 🔜 Planned | |
+| Experiment tracking (MLflow) | 🔜 Planned | |
+| FastAPI service with structured logs and metrics | 🔜 Planned | |
+| Node.js backend-for-frontend, React user app and ops dashboard | 🔜 Planned | |
+| Agent workflow with tool limits and human approval | 🔜 Planned | |
+| Docker, CI, AWS deployment, operations runbook | 🔜 Planned | |
 
 ## Architecture
 
-```mermaid
-flowchart TD
-    A[Source documents\nPDF / TXT / MD files] --> B[Ingestion\nload_documents]
-    B --> C[Chunking\nFixedSizeChunker / RecursiveChunker]
-    C --> D[Embedding\nvector representation]
-    D --> E[Vector store / retrieval index]
-    E --> F[Retrieval\nsemantic + lexical search]
-    K[User query] --> F
-    F --> G[Context assembly]
-    G --> H[Generation\nRAG answer synthesis]
-    H --> I[Evaluation\nquality and relevance checks]
-    I --> J[Final user answer]
+```
+                         INDEXING (offline, incremental)
+ data/raw/*  ──► ingestion ──► sections ──► chunking ──► embedding ──► vector store + manifest
+ pdf docx xlsx    parse_file    page/sheet/   paragraph-    hashing |     memory | FAISS
+ html md csv txt  ingest()      heading       aware, overlap MiniLM |     content-hash sync
+                                                             Bedrock
+
+                         QUERYING
+ question ──► (optional) query transformation ──► hybrid retrieval ──► (optional) rerank ──► grounded prompt ──► answer
+              decompose · PRF · multi-query/HyDE   BM25 + dense          cross-encoder        numbered sources     + checked
+                                                   weighted | RRF        | Bedrock            injection-escaped    citations
 ```
 
-The core flow is purposefully straightforward: source documents are ingested, segmented into chunks, converted into vector embeddings, matched against a user query, and used to produce a grounded answer.
-
-### Code-level mapping
-
-- Ingestion: [src/ingestion/loader.py](src/ingestion/loader.py) defines `load_documents`, which loads text and PDF files from files or directories.
-- Chunking: [src/chunking/fixed_size.py](src/chunking/fixed_size.py) contains the fixed-size chunker, and [src/chunking/recursive.py](src/chunking/recursive.py) adds recursive sentence-aware segmentation.
-- Embedding: [src/embedding/embedder.py](src/embedding/embedder.py) converts text into deterministic vectors.
-- Retrieval: [src/retrieval/hybrid.py](src/retrieval/hybrid.py) combines lexical overlap with vector similarity.
-- Generation: [src/generation/rag_chain.py](src/generation/rag_chain.py) contains the simple `RAGPipeline` answer logic.
-
-### Module dependency flow
-
-```mermaid
-flowchart TD
-    A[data/raw/*.txt or *.pdf] --> B[src/ingestion/loader.py
-load_documents]
-    B --> C[src/chunking/fixed_size.py
-FixedSizeChunker]
-    B --> D[src/chunking/recursive.py
-RecursiveChunker]
-    C --> E[src/embedding/embedder.py
-SimpleEmbedder]
-    D --> E
-    E --> F[src/retrieval/hybrid.py
-hybrid_search]
-    F --> G[src/generation/rag_chain.py
-RAGPipeline.answer]
-    G --> H[Final answer to user]
-```
-
-This module flow shows the repository’s implementation path from raw documents to retrieval and answer generation.
-
-## Repository structure
-
-```text
-.
-|-- config/
-|-- data/
-|-- docs/
-|-- docker/
-|-- evaluation/
-|-- experiments/
-|-- notebooks/
-|-- scripts/
-|-- src/
-|-- tests/
-|-- .env.example
-|-- .gitignore
-|-- LICENSE
-|-- Makefile
-|-- README.md
-|-- create.sh
-|-- pyproject.toml
-|-- requirements.txt
-|-- .venv/
-```
-
-## Features
-
-- file and directory ingestion for text-based sources
-- PDF ingestion support via `pypdf`
-- chunking strategies for long-form document segmentation
-- deterministic embedding generation for prototype retrieval
-- hybrid retrieval combining lexical and vector scoring
-- modular pipeline structure for extension into production systems
-- test coverage for chunking, retrieval, embedding, and ingestion
+Every stage sits behind a small interface (vector store, embedder, reranker, LLM function), so a managed cloud backend can replace a local one without changing the pipeline. See [docs/architecture.md](docs/architecture.md) for components, failure handling and the planned service layers.
 
 ## Quick start
 
-1. Create a virtual environment:
+```bash
+python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+pytest -q                                              # ~160 tests, offline, about a second
 
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate
-   ```
+python scripts/index.py                                # build data/index from data/raw (incremental on re-runs)
+python scripts/query.py "How do toolmakers deal with springback?"
+python scripts/evaluate.py --k 3                       # retrieval metrics on the benchmark
+```
 
-2. Install dependencies:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Run the test suite:
-
-   ```bash
-   pytest -q
-   ```
-
-4. Run the minimal local-file demo:
-
-   ```bash
-   python experiments/01_naive_rag/run.py
-   ```
-
-5. Use a custom document source folder:
-
-   ```bash
-   python - <<'PY'
-   from ingestion.loader import load_documents
-   docs = load_documents('data/raw')
-   print(len(docs))
-   print(docs[0].source)
-   PY
-   ```
-
-## CLI and Streamlit roles
-
-This project is structured to support both technical and user-facing workflows:
-
-### CLI
-The CLI workflow is intended for developers, automation, and internal tooling. It is appropriate for:
-
-- indexing document collections
-- running retrieval and answer generation from scripts
-- batch processing knowledge content
-- integration into backend systems or ETL pipelines
-
-### Streamlit
-A Streamlit app is useful when you want a lightweight web-based interface for:
-
-- business users asking questions about internal documents
-- product demos and internal Q&A workflows
-- low-friction validation of retrieval quality
-- rapid prototyping without a full frontend stack
-
-The repository is intentionally modular so the same retrieval stack can power both a command-line workflow and a browser-based interface.
-
-## Environment variables
-
-Copy the example environment file and configure values as needed:
+Optional extras:
 
 ```bash
-cp .env.example .env
+pip install -e .[local-embeddings]   # sentence-transformers: real embeddings and cross-encoder reranking
+pip install -e .[faiss]              # FAISS vector store
+pip install -e .[aws]                # boto3: Bedrock embeddings and reranking
+
+python scripts/index.py --rebuild --embedder st:sentence-transformers/all-MiniLM-L6-v2 --store faiss
+python scripts/evaluate.py --k 1 --embedder st:sentence-transformers/all-MiniLM-L6-v2
+python scripts/evaluate.py --k 1 --reranker ce:cross-encoder/ms-marco-MiniLM-L-6-v2
 ```
+
+Example output:
+
+```
+Answer:
+High-strength cobalt alloys show more springback than mild steel, so dies are often
+compensated by over-forming the profile by a small angle. [1] ...
+
+Sources (* = cited):
+*[1] forming_defects_notes.txt [380:649]  score=0.653
+ [2] diaphragm_material_notes.txt [406:679]  score=0.402
+```
+
+## Results
+
+Retrieval on the frozen benchmark: 45 questions over the 11 tracked sample documents (40 chunks), in four categories (keyword, paraphrase, distractor, multi-document).
+
+| Configuration | hit@1 | MRR@3 | recall@3 |
+|---|---|---|---|
+| BM25 only | 0.933 | 0.952 | 0.959 |
+| Hashing embedder, hybrid (offline default) | 0.889 | 0.919 | 0.937 |
+| all-MiniLM-L6-v2, dense only | 0.844 | 0.904 | 0.919 |
+| all-MiniLM-L6-v2, hybrid | **0.933** | **0.956** | **0.952** |
+| Any first stage + cross-encoder reranking | 0.933 | 0.952 | 0.952 |
+
+What the measurements showed, in brief (details in [docs/11-rag-evaluation.md](docs/11-rag-evaluation.md)):
+
+- **Dense and lexical retrieval fail on different questions.** The embedding model fixes paraphrases ("rust in the sea" vs "oxide film … seawater"); BM25 catches exact terms ("molybdenum"), so hybrid is the default.
+- **Reranking lifts weak first stages to its own ceiling** (0.689 → 0.911 for hashing dense) but did not improve a good hybrid, at about +70–100 ms per query.
+- **Some methods did not help and are documented as such:** pseudo-relevance feedback caused query drift (hit@1 0.889 → 0.600); RRF fusion of decomposed sub-questions lost each part's best evidence until it was replaced by interleaving.
+- **The benchmark caught regressions the unit tests did not**, including a chunk-deduplication rule that dropped hit@1 to 0.422.
+
+## How it is evaluated
+
+- **Evidence phrases, not chunk IDs:** a retrieved chunk counts as relevant if it contains a labelled phrase verbatim, so the ground truth survives every chunking change.
+- **Frozen before each method:** when the benchmark saturates it is expanded and frozen *before* the next method is implemented.
+- **No tuning on the test set:** defaults are chosen from first principles; parameter sweeps are reported as analysis only.
+- **Per-category metrics** show weaknesses that averages hide.
+- **Data-integrity test:** every evidence phrase must exist in the parsed corpus.
+
+## Project layout
+
+```
+src/
+  ingestion/     parsers per format, fault-tolerant ingest()
+  chunking/      fixed-size and recursive (paragraph-aware) chunkers
+  tokenization.py  shared tokenizer and light stemmer
+  embedding/     hashing, sentence-transformers and Bedrock embedders; create_embedder()
+  vectorstore/   VectorStore interface; in-memory and FAISS backends
+  retrieval/     BM25, hybrid scoring, RRF, SearchIndex (sync, save/load, search)
+  reranking/     cross-encoder and Bedrock rerankers
+  query/         decomposition, pseudo-relevance feedback, LLM rewriting, multi-query retrieve()
+  generation/    grounded prompt, citations, RAGPipeline, extractive answers
+  evaluation/    metrics, dataset, benchmark corpus
+scripts/         index.py, query.py, evaluate.py
+evaluation/      questions.jsonl, ground_truth.jsonl, results.jsonl
+data/raw/        redistributable sample documents (txt, md, html, csv)
+docs/            one document per topic (fundamentals, ingestion, parsing, chunking, embeddings, ...)
+tests/           unit tests, fakes for model SDKs, in-code builders for PDF/DOCX/XLSX
+```
+
+Topic documents: [RAG fundamentals](docs/01-rag-fundamentals.md) · [ingestion](docs/02-document-ingestion.md) · [parsing](docs/03-document-parsing.md) · [chunking](docs/04-chunking.md) · [embeddings](docs/05-embeddings.md) · [vector database](docs/06-vector-database.md) · [reranking](docs/08-reranking.md) · [query transformation](docs/09-query-transformation.md) · [generation](docs/10-generation.md) · [evaluation](docs/11-rag-evaluation.md) · [architecture](docs/architecture.md)
+
+## Known limitations
+
+- **Answerability:** the offline extractive answerer quotes the best-matching sentence even when the question cannot be answered ("What is the price of titanium?" returns a sentence about titanium nitride). Deciding whether the sources answer a question needs the planned LLM step and generation evaluation.
+- **Small benchmark:** 45 questions over 11 short documents; one question changes hit@1 by about 0.022, and the benchmark is also the test set (no separate dev split yet).
+- **General-domain models:** the embedding and reranking models were trained on web data; one paraphrase question (q33) is missed by every configuration.
+- **Bedrock components** are tested with fakes only, not yet against a live AWS account.
+- **Scanned PDFs** need OCR, which is not included.
 
 ## Roadmap
 
-- integrate a production vector store such as FAISS or pgvector
-- add real embeddings via sentence-transformers or OpenAI-compatible APIs
-- add a FastAPI service for structured API access
-- add a Streamlit-based user interface for demo and internal use
-- add end-to-end evaluation metrics for retrieval quality and answer fidelity
-- add CI and contribution guidelines for open-source collaboration
+1. LLM answers through the Anthropic API, with the model and prompt version recorded on every answer
+2. Generation evaluation: faithfulness, citation accuracy, refusals on unanswerable, ambiguous and malicious questions
+3. Experiment tracking with MLflow
+4. FastAPI service with request IDs, structured logs and metrics
+5. Node.js backend-for-frontend (TypeScript), React user app and React ops dashboard
+6. Agent workflow with tool schemas, timeouts, step limits and human approval for side-effecting actions
+7. Docker Compose, GitHub Actions CI, AWS deployment and an operations runbook
 
 ## Contributing
 
-Contributions are welcome. The project is designed to be used as a practical foundation for RAG experimentation, production-oriented document search, and internal knowledge tools.
+Run `pytest -q` and `python scripts/evaluate.py` before and after any change to chunking, embedding or retrieval, and report the metric change. Tests must run offline; model SDKs are optional extras imported lazily, and tests use the fakes in `tests/fakes.py`. Only redistributable documents belong in `data/raw/`.
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
