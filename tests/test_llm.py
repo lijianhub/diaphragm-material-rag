@@ -3,7 +3,7 @@ import os
 import pytest
 
 from generation import RAGPipeline, build_prompt
-from generation.llm import DEFAULT_MODEL, AnthropicLLM, LLMRefusal, OpenAILLM, create_llm
+from generation.llm import DEFAULT_MODEL, AnthropicLLM, CachedLLM, LLMRefusal, OpenAILLM, create_llm
 from ingestion.loader import Document
 from retrieval.index import SearchIndex
 from tests.fakes import FakeAnthropicClient, FakeOpenAIClient
@@ -189,3 +189,78 @@ def test_pipeline_works_unchanged_with_the_openai_backend():
 
     assert answer.used_llm and answer.model == "model-under-test" and answer.citations[0].source == "forming.txt"
     assert client.calls[0]["instructions"] == answer.prompt.system
+
+
+# ---- cost control: effort in the spec, on-disk cache ------------------------
+
+
+
+def test_spec_suffix_sets_reasoning_effort_for_openai_and_effort_for_anthropic():
+    openai_llm = create_llm("openai:model-under-test@low", client=FakeOpenAIClient())
+    anthropic_llm = create_llm("anthropic:claude-opus-5-5@low", client=FakeAnthropicClient())
+
+    assert openai_llm.model == "model-under-test" and openai_llm.reasoning_effort == "low"
+    assert anthropic_llm.model == "claude-opus-5-5" and anthropic_llm.effort == "low"
+    assert openai_llm.name == "openai:model-under-test@low"  # the effort is part of the cache key and the record
+
+
+class CountingLLM:
+    name = "counting"
+
+    def __init__(self, error=None):
+        self.calls = 0
+        self.error = error
+        self.last_call = None
+
+    def chat(self, system, user):
+        from generation.llm import LLMCall
+
+        self.calls += 1
+        if self.error:
+            raise self.error
+        self.last_call = LLMCall(model="m", stop_reason="end", input_tokens=100, output_tokens=10)
+        return f"reply to {user}"
+
+
+def test_cache_serves_repeated_requests_without_calling_the_model(tmp_path):
+    inner = CountingLLM()
+    llm = CachedLLM(inner, tmp_path / "llm.jsonl")
+
+    first = llm.chat("s", "q1")
+    second = llm.chat("s", "q1")
+
+    assert first == second == "reply to q1"
+    assert inner.calls == 1
+    assert llm.last_call.input_tokens == 0 and llm.hits == 1 and llm.misses == 1  # a cached reply costs nothing
+
+
+def test_cache_key_covers_model_system_and_user(tmp_path):
+    inner = CountingLLM()
+    llm = CachedLLM(inner, tmp_path / "llm.jsonl")
+
+    llm.chat("s", "q1")
+    llm.chat("s", "q2")
+    llm.chat("other system", "q1")
+
+    assert inner.calls == 3
+
+
+def test_cache_persists_across_runs_and_never_stores_errors(tmp_path):
+    path = tmp_path / "llm.jsonl"
+    CachedLLM(CountingLLM(), path).chat("s", "q1")
+    failing = CountingLLM(error=TimeoutError("slow"))
+
+    again = CachedLLM(CountingLLM(), path)
+    assert again.chat("s", "q1") == "reply to q1" and again.inner.calls == 0
+
+    broken = CachedLLM(failing, path)
+    with pytest.raises(TimeoutError):
+        broken.chat("s", "new question")
+    assert "new question" not in path.read_text(encoding="utf-8")
+
+
+def test_cached_llm_works_as_a_plain_function_for_rewriting(tmp_path):
+    llm = CachedLLM(CountingLLM(), tmp_path / "llm.jsonl")
+
+    assert llm("rewrite this") == "reply to rewrite this"
+    assert llm.name == "counting"

@@ -62,3 +62,7 @@ Frozen 45-question benchmark (v3). hit@1 / MRR@3 / recall@3:
 - **q33 is still unsolved** ("Can the parts be taken out into the air straight after aging?" vs "cool the parts in the furnace atmosphere before exposing them to air"). Bridging that wording gap is what multi-query rewriting and HyDE are for. They are implemented and unit-tested with a fake model, and will be measured once a real LLM backend is connected.
 
 **Decision.** No transformation is enabled by default. Decomposition (with interleave) is safe to turn on for corpora with many compound questions; PRF should be measured before use; LLM rewriting is the next experiment.
+
+## LLM rewriting results
+
+Measured with `openai:gpt-5.4-mini@low` (details and the full table in [11-rag-evaluation.md](11-rag-evaluation.md)): multi-query and HyDE both raise hit@3 (hashing 0.956 → 0.978; MiniLM 0.978 → 1.000) and retrieve q33 for the first time, by producing phrasings such as "exposed to ambient air immediately after aging". hit@1 is unchanged, because RRF favours the original question's top hit. Rule-based methods (decomposition, PRF) could not bridge that vocabulary gap; a language model could.

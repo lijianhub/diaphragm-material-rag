@@ -21,6 +21,9 @@ venv/
 .coverage
 htmlcov/
 
+# Local LLM response cache (may contain document text)
+.cache/
+
 # Jupyter
 .ipynb_checkpoints/
 

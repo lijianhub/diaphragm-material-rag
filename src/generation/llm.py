@@ -6,8 +6,11 @@ prefers so the grounding rules travel as a real system prompt.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
 
 DEFAULT_MODEL = "claude-opus-5-5"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
@@ -133,7 +136,7 @@ class OpenAILLM:
 
     @property
     def name(self) -> str:
-        return f"openai:{self.model}"
+        return f"openai:{self.model}" + (f"@{self.reasoning_effort}" if self.reasoning_effort else "")
 
     def chat(self, system: Optional[str], user: str) -> str:
         request = {"model": self.model, "input": user, "max_output_tokens": self.max_output_tokens}
@@ -175,15 +178,80 @@ class OpenAILLM:
 def create_llm(spec: str, effort: Optional[str] = None, **kwargs: Any):
     """Build an LLM from a spec:
 
-        anthropic:<model-id>   (or a bare claude-* model ID)  → AnthropicLLM
-        openai:<model-id>                                       → OpenAILLM
+        anthropic:<model-id>[@effort]   (or a bare claude-* model ID)  → AnthropicLLM
+        openai:<model-id>[@effort]                                      → OpenAILLM
 
-    ``effort`` is the Anthropic effort level; it is not forwarded to OpenAI models,
-    where the matching setting (``reasoning_effort``) only exists on some models.
+    The ``@effort`` suffix (e.g. ``openai:<model>@low``) sets Anthropic's ``effort``
+    or OpenAI's ``reasoning_effort``; lower effort spends fewer reasoning tokens.
+    The ``effort`` argument is a default for Anthropic when the spec has none.
     """
-    if spec.startswith("anthropic:") or spec.startswith("claude-"):
-        model = spec[len("anthropic:") :] if spec.startswith("anthropic:") else spec
-        return AnthropicLLM(model=model, **({"effort": effort} if effort else {}), **kwargs)
-    if spec.startswith("openai:"):
-        return OpenAILLM(model=spec[len("openai:") :], **kwargs)
+    body, _, suffix = spec.partition("@")
+    if body.startswith("anthropic:") or body.startswith("claude-"):
+        model = body[len("anthropic:") :] if body.startswith("anthropic:") else body
+        chosen = suffix or effort
+        return AnthropicLLM(model=model, **({"effort": chosen} if chosen else {}), **kwargs)
+    if body.startswith("openai:"):
+        if suffix:
+            kwargs.setdefault("reasoning_effort", suffix)
+        return OpenAILLM(model=body[len("openai:") :], **kwargs)
     raise ValueError(f"unknown LLM {spec!r}; expected anthropic:<model-id> or openai:<model-id>")
+
+
+class CachedLLM:
+    """On-disk cache in front of any LLM, keyed by (model name, system, user).
+
+    Identical requests (re-running an evaluation, repeated questions) are served
+    from a JSONL file and cost nothing. Errors and refusals are never cached. A
+    cached reply sets ``last_call`` with zero tokens, so cost accounting stays honest.
+    The cache file may contain document text; keep it out of version control.
+    """
+
+    def __init__(self, inner: Any, path: Union[str, Path]):
+        self.inner = inner
+        self.path = Path(path)
+        self.hits = 0
+        self.misses = 0
+        self.last_call: Optional[LLMCall] = None
+        self._entries: Dict[str, dict] = {}
+        if self.path.is_file():
+            for line in self.path.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    entry = json.loads(line)
+                    self._entries[entry["key"]] = entry
+
+    @property
+    def name(self) -> str:
+        return getattr(self.inner, "name", type(self.inner).__name__)
+
+    def _key(self, system: Optional[str], user: str) -> str:
+        payload = json.dumps([self.name, system or "", user], ensure_ascii=False)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def chat(self, system: Optional[str], user: str) -> str:
+        key = self._key(system, user)
+        entry = self._entries.get(key)
+        if entry is not None:
+            self.hits += 1
+            self.last_call = LLMCall(model=entry["model"], stop_reason="cached", input_tokens=0, output_tokens=0)
+            return entry["text"]
+
+        self.misses += 1
+        chat = getattr(self.inner, "chat", None)
+        text = chat(system, user) if chat else self.inner(user if system is None else f"{system}\n\n{user}")
+        call = getattr(self.inner, "last_call", None)
+        self.last_call = call
+        entry = {
+            "key": key,
+            "model": call.model if call else self.name,
+            "text": text,
+            "input_tokens": call.input_tokens if call else 0,
+            "output_tokens": call.output_tokens if call else 0,
+        }
+        self._entries[key] = entry
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        return text
+
+    def __call__(self, prompt: str) -> str:
+        return self.chat(None, prompt)

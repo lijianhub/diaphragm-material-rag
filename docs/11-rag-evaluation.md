@@ -199,3 +199,35 @@ On the same frozen v3 benchmark (details in [09-query-transformation.md](09-quer
 - **q33 remains unsolved**; LLM multi-query and HyDE rewriting are implemented but not yet measured (no LLM backend yet).
 
 **Decision.** Defaults unchanged; all transformations are opt-in.
+
+### LLM answers and LLM query rewriting
+
+Model: OpenAI `gpt-5.4-mini` with low reasoning effort (`openai:gpt-5.4-mini@low`), through the provider-independent `create_llm` interface. All replies are cached in `.cache/llm.jsonl`, so the whole matrix below cost **94 calls, about 14.8k tokens** (about 77 input and 79 output tokens per call): 90 rewrites plus 4 answers. Every further configuration was served from the cache.
+
+**Answerability.** On the two questions the offline extractive answerer got wrong, the LLM declined correctly:
+
+| Question | Extractive (offline) | LLM |
+|---|---|---|
+| What is the price of titanium? (not in the corpus) | Quoted a sentence about titanium nitride | "The price of titanium is not in the sources." |
+| Which lot was rejected for tearing? (no lot records) | Quoted general sentences about tearing | "…is not in the sources." |
+| How do toolmakers deal with springback? | Correct | Correct, cited [1] |
+| Why don't these alloys rust in the sea? (right chunk at rank 3) | — | Correct, cited [3] |
+
+Finding to address in the generation evaluation: the refusals still cited `[1][2][3]`. A statement that the sources do *not* contain the answer should carry no citations.
+
+**Query rewriting** on the frozen 45-question benchmark (the first number is without rewriting):
+
+| Embedder | Rewriting | hit@1 | hit@3 | recall@3 | paraphrase hit@3 | q33 |
+|---|---|---|---|---|---|---|
+| hashing | none | 0.889 | 0.956 | 0.937 | 0.833 | ✗ |
+| hashing | multi-query | 0.889 | **0.978** | 0.952 | 0.917 | ✓ (rank 2) |
+| hashing | HyDE | 0.889 | **0.978** | 0.959 | 0.917 | ✓ |
+| MiniLM | none | 0.933 | 0.978 | 0.952 | 0.917 | ✗ |
+| MiniLM | multi-query | 0.933 | **1.000** | 0.963 | **1.000** | ✓ |
+| MiniLM | HyDE | 0.933 | **1.000** | 0.974 | **1.000** | ✓ |
+
+- **q33 is finally retrieved.** A rewrite such as "Can the components be removed and exposed to ambient air immediately after aging?" bridges "taken out into the air" and "before exposing them to air". The evidence moves into the top 3 (rank 2) under every configuration.
+- **hit@1 is unchanged.** Rewriting changed the top result for 6 of 45 questions, but gains and losses cancel out. RRF fusion favours chunks that the original question and its variants agree on, which is the original question's top hit.
+- **Rank 2–3 is enough once an LLM writes the answer**, because the generator reads every retrieved chunk. That makes hit@3 / recall@3 the more relevant metrics from now on.
+
+**Decision.** Rewriting stays opt-in: it costs one LLM call per question (cached when repeated) and helps only paraphrased questions. For a deployment that answers with an LLM, MiniLM hybrid with multi-query or HyDE rewriting is the strongest measured configuration (hit@3 = 1.000).

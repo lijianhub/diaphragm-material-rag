@@ -24,7 +24,7 @@ from config import load_env_file
 
 load_env_file()  # local .env (git-ignored); real environment variables win
 
-from generation import RAGPipeline, create_llm
+from generation import CachedLLM, RAGPipeline, create_llm
 from ingestion.loader import ingest
 from reranking import create_reranker
 from retrieval.index import MANIFEST_FILE, SearchIndex
@@ -71,7 +71,7 @@ def main() -> None:
         sys.exit("The index is empty.")
 
     # Without --llm, answers are extractive quotes with citations.
-    llm = create_llm(args.llm) if args.llm else None
+    llm = CachedLLM(create_llm(args.llm), REPO_ROOT / ".cache" / "llm.jsonl") if args.llm else None
     answer = RAGPipeline(index, complete=llm, top_k=args.top_k).answer(args.question)
 
     print("Question:", args.question)

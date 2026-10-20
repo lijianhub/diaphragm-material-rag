@@ -127,6 +127,12 @@ Both backends implement the same `chat(system, user)` interface, so the pipeline
 | Refusals | A `refusal` content part or a `content_filter` stop raises `LLMRefusal` → extractive fallback | Same contract as Anthropic |
 | Truncation | Text kept; `last_call.stop_reason = "max_output_tokens"` | Visible rather than silent |
 
+### Controlling cost
+
+- **Effort in the spec:** `openai:<model>@low` sets `reasoning.effort`, and `anthropic:<model>@low` sets `effort`. Reasoning tokens are billed, so lower effort is cheaper; query rewriting uses low effort by default.
+- **Response cache:** scripts wrap the LLM in `CachedLLM`, which stores replies in `.cache/llm.jsonl` (git-ignored, because it can contain document text), keyed by model name (including effort), system prompt and user message. Re-running an evaluation or repeating a question costs nothing; `evaluate.py` reports `LLM calls: N new, M from cache`. Errors and refusals are never cached, and cached replies record zero tokens.
+- **Small contexts:** `top_k=3` and the context budget keep prompts around 350 input tokens on the sample corpus.
+
 ### Versioning and traceability
 
 Every `Answer` records:

@@ -19,8 +19,8 @@ The goal is a small but complete AI service that is **evaluated, tested and expl
 | Offline extractive answers with citations | ✅ Implemented and tested | Cannot judge answerability (see limitations) |
 | Retrieval benchmark: 45 questions, 4 categories, hit@k / recall@k / MRR | ✅ Implemented | Frozen before each new method is implemented |
 | Amazon Bedrock embeddings and reranking | 🟡 Implemented, tested with fakes only | Not yet run against a live AWS account |
-| LLM answers through the Anthropic or OpenAI API, with model, prompt version and token usage recorded | 🟡 Implemented, tested with fakes only | Optional `[llm]` extra; keys from the environment or a git-ignored `.env`; not yet run against a live API |
-| LLM query rewriting (multi-query, HyDE) | 🟡 Implemented, tested with fakes only | Not yet measured on the benchmark |
+| LLM answers through the OpenAI or Anthropic API, with model, prompt version and token usage recorded | ✅ Implemented, tested, measured with OpenAI | Declines unanswerable questions correctly; Anthropic backend tested with fakes only |
+| LLM query rewriting (multi-query, HyDE) with an on-disk response cache | ✅ Implemented, tested and benchmarked | Raises hit@3 to 1.000 with MiniLM; opt-in |
 | Generation evaluation (faithfulness, citations, refusals on unanswerable questions) | 🔜 Planned | |
 | Experiment tracking (MLflow) | 🔜 Planned | |
 | FastAPI service with structured logs and metrics | 🔜 Planned | |
@@ -95,6 +95,7 @@ Retrieval on the frozen benchmark: 45 questions over the 11 tracked sample docum
 | all-MiniLM-L6-v2, dense only | 0.844 | 0.904 | 0.919 |
 | all-MiniLM-L6-v2, hybrid | **0.933** | **0.956** | **0.952** |
 | Any first stage + cross-encoder reranking | 0.933 | 0.952 | 0.952 |
+| all-MiniLM-L6-v2, hybrid + LLM rewriting (multi-query or HyDE) | 0.933 | 0.963–0.967 | 0.963–0.974 (hit@3 = 1.000) |
 
 What the measurements showed, in brief (details in [docs/11-rag-evaluation.md](docs/11-rag-evaluation.md)):
 
@@ -102,6 +103,7 @@ What the measurements showed, in brief (details in [docs/11-rag-evaluation.md](d
 - **Reranking lifts weak first stages to its own ceiling** (0.689 → 0.911 for hashing dense) but did not improve a good hybrid, at about +70–100 ms per query.
 - **Some methods did not help and are documented as such:** pseudo-relevance feedback caused query drift (hit@1 0.889 → 0.600); RRF fusion of decomposed sub-questions lost each part's best evidence until it was replaced by interleaving.
 - **The benchmark caught regressions the unit tests did not**, including a chunk-deduplication rule that dropped hit@1 to 0.422.
+- **An LLM fixed what rules couldn't:** query rewriting retrieved the one paraphrase every other method missed, and LLM answers decline unanswerable questions that the offline answerer quoted unrelated sentences for. The whole LLM experiment cost about 15k tokens thanks to a response cache.
 
 ## How it is evaluated
 
@@ -136,7 +138,7 @@ Topic documents: [RAG fundamentals](docs/01-rag-fundamentals.md) · [ingestion](
 
 ## Known limitations
 
-- **Answerability:** the offline extractive answerer quotes the best-matching sentence even when the question cannot be answered ("What is the price of titanium?" returns a sentence about titanium nitride). Deciding whether the sources answer a question needs the planned LLM step and generation evaluation.
+- **Answerability offline:** without an LLM, the extractive answerer quotes the best-matching sentence even when the question cannot be answered ("What is the price of titanium?" returns a sentence about titanium nitride). With an LLM the system declines correctly, but its refusals still carry citations.
 - **Small benchmark:** 45 questions over 11 short documents; one question changes hit@1 by about 0.022, and the benchmark is also the test set (no separate dev split yet).
 - **General-domain models:** the embedding and reranking models were trained on web data; one paraphrase question (q33) is missed by every configuration.
 - **Bedrock components** are tested with fakes only, not yet against a live AWS account.

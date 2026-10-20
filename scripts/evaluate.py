@@ -27,7 +27,7 @@ from chunking import RecursiveChunker
 from embedding import create_embedder
 from evaluation import benchmark_corpus, evaluate_retrieval, load_dataset
 from ingestion.loader import load_documents
-from generation import create_llm
+from generation import CachedLLM, create_llm
 from query import LLMQueryRewriter, decompose, retrieve
 from reranking import create_reranker
 from retrieval.index import FUSION_METHODS, LEXICAL_SCORERS, SearchIndex
@@ -82,7 +82,9 @@ def main() -> None:
     examples = load_dataset(REPO_ROOT / "evaluation" / "questions.jsonl", REPO_ROOT / "evaluation" / "ground_truth.jsonl")
     transforms = [decompose] if args.decompose else []
     if args.rewrite:
-        transforms.append(LLMQueryRewriter(create_llm(args.llm, effort="low"), mode=args.rewrite))
+        # Cached on disk: re-running the evaluation does not pay for the same rewrites again.
+        rewriter_llm = CachedLLM(create_llm(args.llm, effort="low"), REPO_ROOT / ".cache" / "llm.jsonl")
+        transforms.append(LLMQueryRewriter(rewriter_llm, mode=args.rewrite))
 
     def search(question, k):
         results = retrieve(
@@ -94,6 +96,8 @@ def main() -> None:
 
     print(f"documents={len(corpus)} chunks={len(index)} questions={len(examples)} k={report.k} alpha={args.alpha} lexical={args.lexical} stem={args.stem} fusion={args.fusion} store={args.store} embedder={index.embedder.name} reranker={args.reranker} dedupe={args.dedupe} decompose={args.decompose} prf={args.prf} rewrite={args.rewrite}")
     print(f"hit@{report.k}={report.hit_rate:.3f}  recall@{report.k}={report.recall:.3f}  mrr={report.mrr:.3f}")
+    if args.rewrite:
+        print(f"LLM calls: {rewriter_llm.misses} new, {rewriter_llm.hits} from cache")
     for category, score in report.by_category().items():
         print(f"  {category:<11} n={score.count:<3} hit={score.hit_rate:.3f}  recall={score.recall:.3f}  mrr={score.mrr:.3f}")
     for miss in report.misses:
