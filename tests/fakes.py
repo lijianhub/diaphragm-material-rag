@@ -114,3 +114,26 @@ class FakeAnthropicClient:
             model=self.model,
             usage=ns(input_tokens=1200, output_tokens=45),
         )
+
+
+class FakeOpenAIClient:
+    """Stands in for openai.OpenAI(): records responses.create calls and returns a
+    Responses-API-shaped object (reasoning item + message with text or refusal)."""
+
+    def __init__(self, text="Answer [1].", refusal=None, status="completed", incomplete_reason=None, model="model-under-test"):
+        from types import SimpleNamespace as ns
+
+        self.calls = []
+        content = [ns(type="refusal", refusal=refusal)] if refusal else [ns(type="output_text", text=text)]
+        self._response = ns(
+            output=[ns(type="reasoning"), ns(type="message", role="assistant", content=content)],
+            status=status,
+            incomplete_details=ns(reason=incomplete_reason) if incomplete_reason else None,
+            usage=ns(input_tokens=900, output_tokens=60),
+            model=model,
+        )
+        self.responses = ns(create=self._create)
+
+    def _create(self, **kwargs):
+        self.calls.append(kwargs)
+        return self._response

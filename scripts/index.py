@@ -23,6 +23,10 @@ SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from config import load_env_file
+
+load_env_file()  # local .env (git-ignored); real environment variables win
+
 from embedding import create_embedder
 from ingestion.loader import Document, ingest
 from reranking import create_reranker

@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -18,6 +19,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+
+from config import load_env_file
+
+load_env_file()  # local .env (git-ignored); real environment variables win
 
 from generation import RAGPipeline, create_llm
 from ingestion.loader import ingest
@@ -45,7 +50,11 @@ def main() -> None:
     parser.add_argument("--index", type=Path, default=REPO_ROOT / "data" / "index", help="saved index directory")
     parser.add_argument("--source", type=Path, default=REPO_ROOT / "data" / "raw", help="documents to use when there is no saved index")
     parser.add_argument("--no-index", action="store_true", help="always index --source in memory")
-    parser.add_argument("--llm", default=None, help="write the answer with a model, e.g. anthropic:claude-opus-5-5 (needs ANTHROPIC_API_KEY)")
+    parser.add_argument(
+        "--llm",
+        default=os.environ.get("RAG_LLM") or None,
+        help="write the answer with a model, e.g. openai:<model-id> or anthropic:<model-id> (default: RAG_LLM from .env)",
+    )
     parser.add_argument("--reranker", default=None, help="override the index's reranker, e.g. ce:cross-encoder/ms-marco-MiniLM-L-6-v2")
     args = parser.parse_args()
 

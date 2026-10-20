@@ -8,6 +8,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import sys
 from dataclasses import asdict
@@ -17,6 +18,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+
+from config import load_env_file
+
+load_env_file()  # local .env (git-ignored); real environment variables win
 
 from chunking import RecursiveChunker
 from embedding import create_embedder
@@ -48,7 +53,7 @@ def main() -> None:
     parser.add_argument("--decompose", action="store_true", help="split compound questions and fuse the sub-query rankings")
     parser.add_argument("--query-fusion", choices=("rrf", "interleave"), default="interleave", help="how sub-query rankings are merged")
     parser.add_argument("--rewrite", choices=("multi-query", "hyde"), default=None, help="LLM query rewriting (needs --llm)")
-    parser.add_argument("--llm", default="anthropic:claude-opus-5-5", help="model used by --rewrite")
+    parser.add_argument("--llm", default=os.environ.get("RAG_LLM") or "anthropic:claude-opus-5-5", help="model used by --rewrite (default: RAG_LLM)")
     parser.add_argument("--prf", type=int, default=0, help="pseudo-relevance feedback: number of expansion terms (0 = off)")
     parser.add_argument("--prf-docs", type=int, default=3, help="first-pass passages used for feedback")
     parser.add_argument("--store", choices=STORE_KINDS, default="memory", help="vector store backend")

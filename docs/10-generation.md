@@ -85,14 +85,22 @@ Without a language model, `ExtractiveAnswerer` quotes the (up to two) sentences 
 
 Stricter overlap rules fix the last two but reject the first, whose answer shares only "springback" with the question. Deciding whether the sources answer the question needs a language model following the "say so if it's not in the sources" rule, and an evaluation that includes unanswerable questions.
 
-## LLM answers (Anthropic API)
+## LLM answers (Anthropic or OpenAI)
 
 ```bash
 pip install -e .[llm]
-export ANTHROPIC_API_KEY=...          # set in your shell; never commit or paste it anywhere
-python scripts/query.py "How do toolmakers deal with springback?" --llm anthropic:claude-opus-5-5
-python scripts/evaluate.py --k 1 --rewrite hyde          # LLM query rewriting on the benchmark
+cp .env.example .env                  # fill in OPENAI_API_KEY or ANTHROPIC_API_KEY and RAG_LLM; .env is git-ignored
+python scripts/check_llm.py            # which keys are present (names only); OpenAI models this key can use
+python scripts/check_llm.py --ping     # one tiny request to RAG_LLM
+python scripts/query.py "How do toolmakers deal with springback?"          # uses RAG_LLM
+python scripts/evaluate.py --k 1 --rewrite hyde                            # LLM query rewriting on the benchmark
 ```
+
+Scripts read a local `.env` at startup (`config.load_env_file`). Real environment variables always take precedence, and only variable names are ever printed. Choose the model with `RAG_LLM=openai:<model-id>` or `anthropic:<model-id>`, or pass `--llm`.
+
+Both backends implement the same `chat(system, user)` interface, so the pipeline, citations, fallbacks and versioning are provider-independent.
+
+### Anthropic
 
 `generation.llm.AnthropicLLM` calls Claude through the official SDK:
 
@@ -105,6 +113,19 @@ python scripts/evaluate.py --k 1 --rewrite hyde          # LLM query rewriting o
 | Refusal fallback | `fallbacks="default"` with the `server-side-fallback-2026-07-01` beta | A declined request is retried on a suitable model in the same call; a final refusal raises `LLMRefusal` and the pipeline falls back to an extractive answer |
 | Output | Text blocks only | Thinking blocks are not part of the answer |
 | Retries / timeout | SDK retries 408/409/429/5xx and connection errors (`max_retries=2`); `timeout=120` s | Transient failures don't reach the user |
+
+### OpenAI
+
+`generation.llm.OpenAILLM` uses the official SDK's Responses API:
+
+| Setting | Value | Why |
+|---|---|---|
+| Model | No default: set `openai:<model-id>` | Available models differ per account; `scripts/check_llm.py` lists them |
+| System prompt | Sent as `instructions`, sources and question as `input` | Same separation as for Anthropic |
+| Sampling (`temperature`, …) | Not sent | Reasoning models reject sampling parameters |
+| `reasoning.effort` | Only when `reasoning_effort` is set | Not every model supports it |
+| Refusals | A `refusal` content part or a `content_filter` stop raises `LLMRefusal` → extractive fallback | Same contract as Anthropic |
+| Truncation | Text kept; `last_call.stop_reason = "max_output_tokens"` | Visible rather than silent |
 
 ### Versioning and traceability
 

@@ -19,7 +19,7 @@ The goal is a small but complete AI service that is **evaluated, tested and expl
 | Offline extractive answers with citations | ✅ Implemented and tested | Cannot judge answerability (see limitations) |
 | Retrieval benchmark: 45 questions, 4 categories, hit@k / recall@k / MRR | ✅ Implemented | Frozen before each new method is implemented |
 | Amazon Bedrock embeddings and reranking | 🟡 Implemented, tested with fakes only | Not yet run against a live AWS account |
-| LLM answers through the Anthropic API, with model, prompt version and token usage recorded | 🟡 Implemented, tested with fakes only | Optional `[llm]` extra; not yet run against the live API |
+| LLM answers through the Anthropic or OpenAI API, with model, prompt version and token usage recorded | 🟡 Implemented, tested with fakes only | Optional `[llm]` extra; keys from the environment or a git-ignored `.env`; not yet run against a live API |
 | LLM query rewriting (multi-query, HyDE) | 🟡 Implemented, tested with fakes only | Not yet measured on the benchmark |
 | Generation evaluation (faithfulness, citations, refusals on unanswerable questions) | 🔜 Planned | |
 | Experiment tracking (MLflow) | 🔜 Planned | |
@@ -63,7 +63,9 @@ Optional extras:
 pip install -e .[local-embeddings]   # sentence-transformers: real embeddings and cross-encoder reranking
 pip install -e .[faiss]              # FAISS vector store
 pip install -e .[aws]                # boto3: Bedrock embeddings and reranking
-pip install -e .[llm]                # anthropic: LLM answers and query rewriting (needs ANTHROPIC_API_KEY)
+pip install -e .[llm]                # anthropic + openai SDKs: LLM answers and query rewriting
+cp .env.example .env                 # add OPENAI_API_KEY or ANTHROPIC_API_KEY and RAG_LLM (git-ignored)
+python scripts/check_llm.py          # verify configuration without printing secrets
 
 python scripts/index.py --rebuild --embedder st:sentence-transformers/all-MiniLM-L6-v2 --store faiss
 python scripts/evaluate.py --k 1 --embedder st:sentence-transformers/all-MiniLM-L6-v2

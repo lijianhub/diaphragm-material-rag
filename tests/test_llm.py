@@ -3,10 +3,10 @@ import os
 import pytest
 
 from generation import RAGPipeline, build_prompt
-from generation.llm import DEFAULT_MODEL, AnthropicLLM, LLMRefusal, create_llm
+from generation.llm import DEFAULT_MODEL, AnthropicLLM, LLMRefusal, OpenAILLM, create_llm
 from ingestion.loader import Document
 from retrieval.index import SearchIndex
-from tests.fakes import FakeAnthropicClient
+from tests.fakes import FakeAnthropicClient, FakeOpenAIClient
 
 DOCS = [
     Document(source="forming.txt", content="Springback is compensated by over-forming the profile by a small angle."),
@@ -76,7 +76,7 @@ def test_create_llm_from_spec():
 
     assert llm.model == "claude-sonnet-5-5" and llm.name == "anthropic:claude-sonnet-5-5"
     with pytest.raises(ValueError):
-        create_llm("openai:gpt")
+        create_llm("mistral:large")
 
 
 # ---- versioning and traceability in the pipeline ---------------------------
@@ -126,3 +126,66 @@ def test_real_model_answers_with_a_valid_citation():
     answer = RAGPipeline(_index(), complete=AnthropicLLM(), top_k=2).answer("How is springback compensated?")
 
     assert answer.used_llm and answer.citations and not answer.invalid_citations
+
+
+# ---- OpenAI backend ----------------------------------------------------------
+
+
+
+def test_openai_request_uses_instructions_input_and_output_limit():
+    client = FakeOpenAIClient()
+
+    OpenAILLM("model-under-test", client=client).chat("You are grounded.", "Sources: ... Question: q")
+
+    call = client.calls[0]
+    assert call["model"] == "model-under-test"
+    assert call["instructions"] == "You are grounded."
+    assert call["input"] == "Sources: ... Question: q"
+    assert call["max_output_tokens"] >= 4096
+    assert "temperature" not in call and "reasoning" not in call  # not every model accepts them
+
+
+def test_openai_returns_message_text_and_records_usage():
+    llm = OpenAILLM("model-under-test", client=FakeOpenAIClient(text="Over-forming [1]."))
+
+    assert llm.chat("s", "u") == "Over-forming [1]."  # the reasoning item is ignored
+    assert (llm.last_call.input_tokens, llm.last_call.output_tokens, llm.last_call.model) == (900, 60, "model-under-test")
+
+
+def test_openai_refusal_and_content_filter_raise_llm_refusal():
+    with pytest.raises(LLMRefusal):
+        OpenAILLM("m", client=FakeOpenAIClient(refusal="I can't help with that.")).chat("s", "u")
+    with pytest.raises(LLMRefusal, match="content_filter"):
+        OpenAILLM("m", client=FakeOpenAIClient(text="", status="incomplete", incomplete_reason="content_filter")).chat("s", "u")
+
+
+def test_openai_truncated_answer_is_kept_but_marked():
+    llm = OpenAILLM("m", client=FakeOpenAIClient(text="Partial answer [1]", status="incomplete", incomplete_reason="max_output_tokens"))
+
+    assert llm.chat("s", "u") == "Partial answer [1]"
+    assert llm.last_call.stop_reason == "max_output_tokens"
+
+
+def test_openai_reasoning_effort_is_sent_only_when_asked():
+    client = FakeOpenAIClient()
+
+    OpenAILLM("m", reasoning_effort="low", client=client).chat("s", "u")
+
+    assert client.calls[0]["reasoning"] == {"effort": "low"}
+
+
+def test_create_llm_builds_openai_and_requires_a_model_id():
+    llm = create_llm("openai:model-under-test", client=FakeOpenAIClient())
+
+    assert isinstance(llm, OpenAILLM) and llm.name == "openai:model-under-test"
+    with pytest.raises(ValueError, match="model"):
+        create_llm("openai:", client=FakeOpenAIClient())
+
+
+def test_pipeline_works_unchanged_with_the_openai_backend():
+    client = FakeOpenAIClient(text="Dies are over-formed [1].")
+
+    answer = RAGPipeline(_index(), complete=OpenAILLM("model-under-test", client=client), top_k=2).answer("How is springback compensated?")
+
+    assert answer.used_llm and answer.model == "model-under-test" and answer.citations[0].source == "forming.txt"
+    assert client.calls[0]["instructions"] == answer.prompt.system
