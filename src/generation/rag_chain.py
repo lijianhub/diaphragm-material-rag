@@ -26,6 +26,9 @@ class Answer:
     invalid_citations: List[int] = field(default_factory=list)
     fallback_reason: Optional[str] = None
     prompt: Optional[Prompt] = None
+    model: str = "extractive"  # the model that wrote the answer, as served
+    prompt_version: str = ""
+    usage: Optional[dict] = None  # token counts when an LLM was called
 
 
 _SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
@@ -103,15 +106,21 @@ class RAGPipeline:
             results = self._retrieve(question)
 
         if not results:
-            return Answer(text=ExtractiveAnswerer.NOT_FOUND)
+            return Answer(text=ExtractiveAnswerer.NOT_FOUND, model="none")
 
         prompt = build_prompt(question, results, self.max_context_tokens)
         offered = list(results[: prompt.included])
-        text, used_llm, reason = None, False, None
+        text, used_llm, reason, model, usage = None, False, None, "extractive", None
         if self.complete is not None:
             try:
-                text = self.complete(prompt.as_text()).strip()
+                chat = getattr(self.complete, "chat", None)
+                # Prefer a real system prompt; plain functions get one combined string.
+                text = (chat(prompt.system, prompt.user) if chat else self.complete(prompt.as_text())).strip()
                 used_llm = True
+                call = getattr(self.complete, "last_call", None)
+                model = call.model if call else getattr(self.complete, "name", "llm")
+                if call:
+                    usage = {"input_tokens": call.input_tokens, "output_tokens": call.output_tokens}
             except Exception as exc:  # degrade to an extractive answer instead of failing
                 reason = f"{type(exc).__name__}: {exc}"
         if text is None:
@@ -130,4 +139,7 @@ class RAGPipeline:
             invalid_citations=invalid,
             fallback_reason=reason,
             prompt=prompt,
+            model=model,
+            prompt_version=prompt.version,
+            usage=usage,
         )

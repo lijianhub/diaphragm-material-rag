@@ -19,8 +19,8 @@ The goal is a small but complete AI service that is **evaluated, tested and expl
 | Offline extractive answers with citations | ✅ Implemented and tested | Cannot judge answerability (see limitations) |
 | Retrieval benchmark: 45 questions, 4 categories, hit@k / recall@k / MRR | ✅ Implemented | Frozen before each new method is implemented |
 | Amazon Bedrock embeddings and reranking | 🟡 Implemented, tested with fakes only | Not yet run against a live AWS account |
-| LLM rewriting (multi-query, HyDE) and LLM answers | 🟡 Implemented, tested with fakes only | Waiting for the LLM backend |
-| Anthropic API generation with model and prompt versioning | 🔜 Planned | |
+| LLM answers through the Anthropic API, with model, prompt version and token usage recorded | 🟡 Implemented, tested with fakes only | Optional `[llm]` extra; not yet run against the live API |
+| LLM query rewriting (multi-query, HyDE) | 🟡 Implemented, tested with fakes only | Not yet measured on the benchmark |
 | Generation evaluation (faithfulness, citations, refusals on unanswerable questions) | 🔜 Planned | |
 | Experiment tracking (MLflow) | 🔜 Planned | |
 | FastAPI service with structured logs and metrics | 🔜 Planned | |
@@ -63,6 +63,7 @@ Optional extras:
 pip install -e .[local-embeddings]   # sentence-transformers: real embeddings and cross-encoder reranking
 pip install -e .[faiss]              # FAISS vector store
 pip install -e .[aws]                # boto3: Bedrock embeddings and reranking
+pip install -e .[llm]                # anthropic: LLM answers and query rewriting (needs ANTHROPIC_API_KEY)
 
 python scripts/index.py --rebuild --embedder st:sentence-transformers/all-MiniLM-L6-v2 --store faiss
 python scripts/evaluate.py --k 1 --embedder st:sentence-transformers/all-MiniLM-L6-v2
@@ -141,13 +142,12 @@ Topic documents: [RAG fundamentals](docs/01-rag-fundamentals.md) · [ingestion](
 
 ## Roadmap
 
-1. LLM answers through the Anthropic API, with the model and prompt version recorded on every answer
-2. Generation evaluation: faithfulness, citation accuracy, refusals on unanswerable, ambiguous and malicious questions
-3. Experiment tracking with MLflow
-4. FastAPI service with request IDs, structured logs and metrics
-5. Node.js backend-for-frontend (TypeScript), React user app and React ops dashboard
-6. Agent workflow with tool schemas, timeouts, step limits and human approval for side-effecting actions
-7. Docker Compose, GitHub Actions CI, AWS deployment and an operations runbook
+1. Generation evaluation: faithfulness, citation accuracy, refusals on unanswerable, ambiguous and malicious questions
+2. Experiment tracking with MLflow
+3. FastAPI service with request IDs, structured logs and metrics
+4. Node.js backend-for-frontend (TypeScript), React user app and React ops dashboard
+5. Agent workflow with tool schemas, timeouts, step limits and human approval for side-effecting actions
+6. Docker Compose, GitHub Actions CI, AWS deployment and an operations runbook
 
 ## Contributing
 

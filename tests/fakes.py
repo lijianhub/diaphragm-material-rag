@@ -86,3 +86,31 @@ class FakeLLM:
         if self.error:
             raise self.error
         return self.reply
+
+
+class FakeAnthropicClient:
+    """Stands in for anthropic.Anthropic(): records messages.create / beta.messages.create
+    calls and returns a response shaped like the SDK's (thinking + text blocks, usage)."""
+
+    def __init__(self, text="Answer [1].", stop_reason="end_turn", model="claude-opus-5-5", refusal_category=None, error=None):
+        from types import SimpleNamespace
+
+        self.calls = []
+        self._ns = SimpleNamespace
+        self.text, self.stop_reason, self.model = text, stop_reason, model
+        self.refusal_category, self.error = refusal_category, error
+        self.messages = SimpleNamespace(create=lambda **kw: self._create("messages", kw))
+        self.beta = SimpleNamespace(messages=SimpleNamespace(create=lambda **kw: self._create("beta", kw)))
+
+    def _create(self, path, kwargs):
+        self.calls.append({"path": path, **kwargs})
+        if self.error:
+            raise self.error
+        ns = self._ns
+        return ns(
+            content=[ns(type="thinking", thinking=""), ns(type="text", text=self.text)],
+            stop_reason=self.stop_reason,
+            stop_details=ns(type="refusal", category=self.refusal_category, explanation="declined") if self.stop_reason == "refusal" else None,
+            model=self.model,
+            usage=ns(input_tokens=1200, output_tokens=45),
+        )

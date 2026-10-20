@@ -84,3 +84,37 @@ Without a language model, `ExtractiveAnswerer` quotes the (up to two) sentences 
 | Which lot was rejected for tearing? (no lot records in the sample corpus) | Sentences about tearing in general | Answers a different question |
 
 Stricter overlap rules fix the last two but reject the first, whose answer shares only "springback" with the question. Deciding whether the sources answer the question needs a language model following the "say so if it's not in the sources" rule, and an evaluation that includes unanswerable questions.
+
+## LLM answers (Anthropic API)
+
+```bash
+pip install -e .[llm]
+export ANTHROPIC_API_KEY=...          # set in your shell; never commit or paste it anywhere
+python scripts/query.py "How do toolmakers deal with springback?" --llm anthropic:claude-opus-5-5
+python scripts/evaluate.py --k 1 --rewrite hyde          # LLM query rewriting on the benchmark
+```
+
+`generation.llm.AnthropicLLM` calls Claude through the official SDK:
+
+| Setting | Value | Why |
+|---|---|---|
+| Model | `claude-opus-5-5` (default; any model via `create_llm("anthropic:<id>")`) | Current Opus model |
+| System prompt | Sent as `system`, sources as the user message | The grounding rules are operator instructions, not part of the question |
+| `output_config.effort` | `medium` for answers (set explicitly), `low` for query rewriting | Opus 5.5 always thinks; effort is the cost and depth control |
+| Sampling (`temperature`, …) | Not sent | Not accepted by this model |
+| Refusal fallback | `fallbacks="default"` with the `server-side-fallback-2026-07-01` beta | A declined request is retried on a suitable model in the same call; a final refusal raises `LLMRefusal` and the pipeline falls back to an extractive answer |
+| Output | Text blocks only | Thinking blocks are not part of the answer |
+| Retries / timeout | SDK retries 408/409/429/5xx and connection errors (`max_retries=2`); `timeout=120` s | Transient failures don't reach the user |
+
+### Versioning and traceability
+
+Every `Answer` records:
+
+- `model`: the model that actually served the request (it can differ from the one requested after a refusal fallback), or `extractive`;
+- `prompt_version`: `grounded-v1+<sha256 of the system prompt, 8 chars>`. The label is bumped on purpose; the fingerprint changes on **any** edit, so an untracked prompt change is still visible in recorded answers;
+- `usage`: input and output tokens, the basis for cost metrics;
+- `fallback_reason`: why an LLM answer was replaced by an extractive one (for example missing credentials, a timeout or a refusal).
+
+`scripts/query.py` prints these after the answer, e.g. `[model=claude-opus-5-5 prompt=grounded-v1+e7a9f1b0 tokens in/out=1450/62]`.
+
+A missing API key currently degrades to an extractive answer with the reason shown. A service should instead check its configuration at startup and fail fast.

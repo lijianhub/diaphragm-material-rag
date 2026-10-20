@@ -1,9 +1,13 @@
 """Grounded prompts: numbered sources, citation rules and a context budget."""
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import List, Sequence, Tuple
+
+# Bump the label when the prompt is changed on purpose; the fingerprint catches any edit.
+PROMPT_LABEL = "grounded-v1"
 
 SYSTEM_PROMPT = """You answer questions about engineering documents using only the numbered sources provided.
 
@@ -24,6 +28,7 @@ class Prompt:
     system: str
     user: str
     included: int  # how many sources fit in the context budget
+    version: str = ""  # "<label>+<sha256 of the system prompt, 8 chars>"
 
     def as_text(self) -> str:
         """Single-string form for completion-style functions."""
@@ -79,7 +84,14 @@ def build_prompt(question: str, results: Sequence, max_context_tokens: int = 300
 
     sources = "\n\n".join(blocks) if blocks else "(no sources were found)"
     user = f"Sources:\n\n{sources}\n\nQuestion: {question}\n\nAnswer with citations:"
-    return Prompt(system=SYSTEM_PROMPT, user=user, included=len(blocks))
+    return Prompt(system=SYSTEM_PROMPT, user=user, included=len(blocks), version=prompt_version())
+
+
+def prompt_version(system: str = None) -> str:
+    """Version of the system prompt in use: a human label plus a content fingerprint,
+    so an accidental edit is still visible in every recorded answer."""
+    text = SYSTEM_PROMPT if system is None else system
+    return f"{PROMPT_LABEL}+{hashlib.sha256(text.encode('utf-8')).hexdigest()[:8]}"
 
 
 _CITATION = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")

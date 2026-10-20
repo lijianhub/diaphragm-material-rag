@@ -3,3 +3,4 @@ pypdf>=4.0.0
 # Optional FAISS vector store: pip install faiss-cpu numpy  (or: pip install -e .[faiss])
 # Optional local embedding model: pip install -e .[local-embeddings]
 # Optional AWS Bedrock embeddings: pip install -e .[aws]
+# Optional LLM answers and query rewriting (Anthropic API): pip install -e .[llm]
