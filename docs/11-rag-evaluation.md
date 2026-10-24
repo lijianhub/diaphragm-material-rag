@@ -4,6 +4,8 @@ Retrieval is evaluated before generation: if the right passage is not retrieved,
 
 ## Run it
 
+Add `--track mlflow` (or `--track jsonl`) to record a run with its configuration, versions and results; see [15-experiment-tracking.md](15-experiment-tracking.md).
+
 ```bash
 python scripts/evaluate.py                    # k=3, weighted fusion, alpha=0.5
 python scripts/evaluate.py --k 1 --alpha 0     # lexical only, strict top-1
