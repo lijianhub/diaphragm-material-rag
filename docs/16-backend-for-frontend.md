@@ -33,6 +33,7 @@ npm run typecheck && npm run build && npm start  # production build in bff/dist
 |---|---|---|
 | `POST /api/ask` | validates, authenticates, rate-limits, forwards to `/ask`, passes status and body through | 400 invalid, 401, 429 (with `Retry-After`), 502 API unreachable, 504 API timeout, API errors passed through |
 | `POST /api/ask/stream` | the same, then pipes the API's Server-Sent Events to the browser without buffering | as above before the stream starts; an `error` event if the upstream stream breaks |
+| `POST /api/feedback` | validates (`request_id` pattern, `rating` `up`/`down`, `comment` up to 500 characters), authenticates, rate-limits, forwards to `/feedback` | as for `/api/ask` |
 | `GET /api/health` | liveness of the BFF itself (no upstream call, no authentication) | — |
 | `GET /api/ready` | the API's readiness, passed through | 503 when the API is down or not ready |
 

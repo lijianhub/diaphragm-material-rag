@@ -28,6 +28,23 @@ const askSchema = {
   },
 } as const;
 
+const feedbackSchema = {
+  type: "object",
+  required: ["request_id", "rating"],
+  additionalProperties: false,
+  properties: {
+    request_id: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,64}$" },
+    rating: { type: "string", enum: ["up", "down"] },
+    comment: { type: "string", maxLength: 500 },
+  },
+} as const;
+
+interface FeedbackBody {
+  request_id: string;
+  rating: "up" | "down";
+  comment?: string;
+}
+
 interface AskBody {
   question: string;
   top_k?: number;
@@ -124,10 +141,11 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
     }
   });
 
-  app.post<{ Body: AskBody }>("/api/ask", askRoute, async (request, reply) => {
+  /** Forward a JSON body to the API and pass its status and body back (its errors carry the same request ID). */
+  const proxyJson = async (request: FastifyRequest, reply: FastifyReply, path: string) => {
     let upstream: Response;
     try {
-      upstream = await fetch(`${config.upstreamUrl}/ask`, {
+      upstream = await fetch(`${config.upstreamUrl}${path}`, {
         method: "POST",
         headers: upstreamHeaders(request),
         body: JSON.stringify(request.body),
@@ -138,9 +156,20 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
       request.log.warn({ err: error }, "upstream request failed");
       return reply.code(timedOut ? 504 : 502).send(errorBody(request, timedOut ? "upstream_timeout" : "upstream_unavailable"));
     }
-    // Pass the API's status and body through: its errors already carry the same request ID.
     return reply.code(upstream.status).type("application/json").send(await upstream.text());
-  });
+  };
+
+  app.post<{ Body: AskBody }>("/api/ask", askRoute, (request, reply) => proxyJson(request, reply, "/ask"));
+
+  app.post<{ Body: FeedbackBody }>(
+    "/api/feedback",
+    {
+      schema: { body: feedbackSchema },
+      preHandler: authenticate,
+      config: { rateLimit: { max: config.rateLimitMax, timeWindow: config.rateLimitWindow } },
+    },
+    (request, reply) => proxyJson(request, reply, "/feedback"),
+  );
 
   app.post<{ Body: AskBody }>("/api/ask/stream", askRoute, async (request, reply) => {
     const controller = new AbortController();

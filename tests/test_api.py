@@ -330,3 +330,45 @@ def test_a_client_disconnect_closes_the_llm_stream_on_a_real_server():
     finally:
         server.should_exit = True
         thread.join(timeout=5)
+
+
+# ---- feedback -----------------------------------------------------------------
+
+
+def test_feedback_is_stored_counted_and_kept_out_of_the_log(tmp_path, caplog):
+    path = tmp_path / "feedback.jsonl"
+    client = TestClient(create_app(Settings(index_dir="none", feedback_path=str(path)), index=_index()), raise_server_exceptions=False)
+
+    with caplog.at_level(logging.INFO, logger="rag.api"):
+        up = client.post("/feedback", json={"request_id": "ans-1", "rating": "up"}, headers={"X-Request-ID": "fb-1"})
+        down = client.post("/feedback", json={"request_id": "ans-2", "rating": "down", "comment": "cited the wrong alloy, part 4711"})
+    entries = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    metrics = client.get("/metrics").text
+    logs = [json.loads(r.getMessage()) for r in caplog.records if r.name == "rag.api"]
+
+    assert up.status_code == 201 and up.json() == {"status": "recorded", "request_id": "fb-1"}
+    assert down.status_code == 201
+    assert [(e["answer_request_id"], e["rating"]) for e in entries] == [("ans-1", "up"), ("ans-2", "down")]
+    assert entries[1]["comment"] == "cited the wrong alloy, part 4711" and entries[0]["feedback_request_id"] == "fb-1"
+    assert 'rag_feedback_total{rating="up"} 1' in metrics and 'rag_feedback_total{rating="down"} 1' in metrics
+    assert logs[1]["rating"] == "down" and logs[1]["has_comment"] is True
+    assert "4711" not in json.dumps(logs)  # the comment lives in the store, not the log
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"request_id": "ans-1", "rating": "meh"},
+        {"request_id": "bad id with spaces", "rating": "up"},
+        {"request_id": "ans-1", "rating": "up", "comment": "x" * 501},
+        {"rating": "up"},
+    ],
+)
+def test_invalid_feedback_is_rejected(payload, tmp_path):
+    path = tmp_path / "feedback.jsonl"
+    client = TestClient(create_app(Settings(index_dir="none", feedback_path=str(path)), index=_index()), raise_server_exceptions=False)
+
+    response = client.post("/feedback", json=payload)
+
+    assert response.status_code == 422 and response.json()["error"] == "invalid_request"
+    assert not path.exists()

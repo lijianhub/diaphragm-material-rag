@@ -81,17 +81,17 @@ question ─► [transforms] ─► first-stage retrieval per query (BM25 + dens
 
 ```
 Browser
- ├─ React user app        ask, read cited answers, open sources, give feedback
- └─ React ops dashboard   latency, errors, cost, evaluation trends, ingestion failures, approval queue
+ ├─ React user app        ask, read cited answers, open sources, give feedback (implemented: web/)
+ └─ React ops dashboard   latency, errors, cost, evaluation trends, ingestion failures, approval queue (planned)
          │ HTTP + Server-Sent Events
  Node.js backend-for-frontend (implemented: bff/, TypeScript, Fastify)
          request IDs, rate limiting, API-key auth stub, CORS, SSE pass-through, cancellation
          │ HTTP JSON
  Python FastAPI service (implemented: src/api)
-         /ask /ask/stream /health /ready /metrics · request IDs · JSON logs · versioned answers
+         /ask /ask/stream /feedback /health /ready /metrics · request IDs · JSON logs · versioned answers
 ```
 
-The React apps are planned. The backend-for-frontend ([16-backend-for-frontend.md](16-backend-for-frontend.md)) is a common pattern that keeps browser concerns (sessions, streaming, aggregation) out of the Python service. A minimal deployment could have React call FastAPI directly.
+The user app ([17-web-app.md](17-web-app.md)) is implemented; the ops dashboard is planned. The backend-for-frontend ([16-backend-for-frontend.md](16-backend-for-frontend.md)) is a common pattern that keeps browser concerns (sessions, streaming, aggregation) out of the Python service. A minimal deployment could have React call FastAPI directly.
 
 ## Deployment Target
 

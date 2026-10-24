@@ -29,6 +29,8 @@ class FakeUpstream {
           } else {
             res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ request_id: id, answer: "Over-formed [1]." }));
           }
+        } else if (req.url === "/feedback") {
+          res.writeHead(201, { "content-type": "application/json" }).end(JSON.stringify({ status: "recorded", request_id: id }));
         } else if (req.url === "/ask/stream") {
           res.writeHead(200, { "content-type": "text/event-stream" });
           res.on("close", () => {
@@ -233,6 +235,36 @@ describe("POST /api/ask/stream", () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     expect(upstream.streamClosedByPeer).toBe(true);
+  });
+});
+
+describe("POST /api/feedback", () => {
+  it("forwards a rating with the request ID", async () => {
+    const response = await ask({ request_id: "ans-1", rating: "down", comment: "wrong alloy" }, { "x-request-id": "fb-1" }, "/api/feedback");
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toEqual({ status: "recorded", request_id: "fb-1" });
+    expect(upstream.requests.at(-1)?.path).toBe("/feedback");
+    expect(JSON.parse(upstream.requests.at(-1)!.body)).toEqual({ request_id: "ans-1", rating: "down", comment: "wrong alloy" });
+  });
+
+  it.each([
+    [{ request_id: "ans-1", rating: "meh" }],
+    [{ request_id: "bad id", rating: "up" }],
+    [{ request_id: "ans-1", rating: "up", comment: "x".repeat(501) }],
+  ])("rejects %j with 400", async (body) => {
+    const response = await ask(body, {}, "/api/feedback");
+
+    expect(response.statusCode).toBe(400);
+    expect(upstream.requests).toHaveLength(0);
+  });
+
+  it("requires the API key when authentication is on", async () => {
+    await app.close();
+    app = await buildApp(config({ apiKeys: ["k"] }));
+
+    expect((await ask({ request_id: "a", rating: "up" }, {}, "/api/feedback")).statusCode).toBe(401);
+    expect((await ask({ request_id: "a", rating: "up" }, { authorization: "Bearer k" }, "/api/feedback")).statusCode).toBe(201);
   });
 });
 

@@ -3,6 +3,7 @@
 Endpoints:
 - ``POST /ask``     answer a question with citations, model, prompt version, tokens and stage timings
 - ``POST /ask/stream``  the same answer as Server-Sent Events: ``sources``, ``delta``..., ``final`` (or ``error``)
+- ``POST /feedback`` record a 👍/👎 rating (and an optional comment) for an answer's request ID
 - ``GET /health``   liveness: the process is up
 - ``GET /ready``    readiness: the index is loaded (503 otherwise)
 - ``GET /metrics``  Prometheus text format: requests, latency, stage timings, outcomes, LLM calls, tokens
@@ -20,6 +21,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -35,7 +37,17 @@ from generation import RAGPipeline
 from generation.prompt import citation_label
 
 from .metrics import Metrics
-from .schemas import AskRequest, AskResponse, CitationOut, ErrorResponse, HealthResponse, ReadyResponse, SourceOut
+from .schemas import (
+    AskRequest,
+    AskResponse,
+    CitationOut,
+    ErrorResponse,
+    FeedbackRequest,
+    FeedbackResponse,
+    HealthResponse,
+    ReadyResponse,
+    SourceOut,
+)
 
 logger = logging.getLogger("rag.api")
 
@@ -49,6 +61,7 @@ class Settings:
     llm: str = ""  # e.g. "openai:<model>@low"; empty → extractive answers
     llm_timeout: float = 30.0  # seconds per LLM call; the SDK default (120 s) is too long for a user request
     llm_max_retries: int = 1
+    feedback_path: str = "logs/feedback.jsonl"  # git-ignored; one JSON object per rating
 
     @classmethod
     def from_env(cls, base_dir: Optional[Path] = None) -> "Settings":
@@ -58,6 +71,7 @@ class Settings:
             llm=os.environ.get("RAG_LLM", ""),
             llm_timeout=float(os.environ.get("RAG_LLM_TIMEOUT", "30")),
             llm_max_retries=int(os.environ.get("RAG_LLM_MAX_RETRIES", "1")),
+            feedback_path=os.environ.get("RAG_FEEDBACK_PATH") or str(base / "logs" / "feedback.jsonl"),
         )
 
 
@@ -282,6 +296,29 @@ def create_app(settings: Optional[Settings] = None, *, index=None, llm=None, met
         headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}  # no proxy buffering of the stream
         # closing_stream: a client disconnect must close the generator, and with it the LLM stream.
         return ClosingStreamingResponse(closing_stream(events()), media_type="text/event-stream", headers=headers)
+
+    feedback_lock = threading.Lock()
+
+    @app.post("/feedback", status_code=201, response_model=FeedbackResponse, responses={422: {"model": ErrorResponse}})
+    def feedback(body: FeedbackRequest, request: Request):
+        """Store a rating for the answer with ``body.request_id``. The comment is kept in the
+        feedback file (the store), not in the request log."""
+        request_id = request.state.request_id
+        entry = {
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "answer_request_id": body.request_id,
+            "rating": body.rating,
+            "comment": body.comment,
+            "feedback_request_id": request_id,
+        }
+        path = Path(settings.feedback_path)
+        with feedback_lock:  # concurrent requests run in a thread pool: one writer at a time
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        metrics.record_feedback(body.rating)
+        request.state.log.update(answer_request_id=body.request_id, rating=body.rating, has_comment=bool(body.comment))
+        return FeedbackResponse(status="recorded", request_id=request_id)
 
     @app.get("/metrics", response_class=PlainTextResponse)
     def prometheus_metrics():

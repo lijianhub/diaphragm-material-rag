@@ -98,6 +98,7 @@ class Metrics:
         self.answers = Counter("rag_answers_total", "Answers by outcome: answered, refused, fallback.")
         self.llm_calls = Counter("rag_llm_calls_total", "LLM calls by model.")
         self.tokens = Counter("rag_llm_tokens_total", "LLM tokens by model and direction (input, output).")
+        self.feedback = Counter("rag_feedback_total", "User feedback on answers by rating (up, down).")
 
     def record_request(self, method: str, route: str, status: int, seconds: float) -> None:
         with self._lock:
@@ -116,7 +117,11 @@ class Metrics:
                 self.tokens.inc(usage.get("input_tokens", 0), model=answer.model, direction="input")
                 self.tokens.inc(usage.get("output_tokens", 0), model=answer.model, direction="output")
 
+    def record_feedback(self, rating: str) -> None:
+        with self._lock:
+            self.feedback.inc(rating=rating)
+
     def render(self) -> str:
         with self._lock:
-            parts = [self.requests, self.request_seconds, self.stage_seconds, self.answers, self.llm_calls, self.tokens]
+            parts = [self.requests, self.request_seconds, self.stage_seconds, self.answers, self.llm_calls, self.tokens, self.feedback]
             return "\n".join(line for metric in parts for line in metric.render()) + "\n"

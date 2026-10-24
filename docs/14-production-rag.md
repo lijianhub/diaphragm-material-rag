@@ -27,6 +27,7 @@ curl -s localhost:8000/metrics
 |---|---|---|
 | `POST /ask` | answer with citations, sources, refused flag, model, prompt version, tokens, stage timings | 200; 422 invalid request; 503 no index; 500 unexpected error |
 | `POST /ask/stream` | the same answer as Server-Sent Events: `sources`, `delta`…, `final` (or `error`); see [16-backend-for-frontend.md](16-backend-for-frontend.md) | 422 and 503 before the stream starts; afterwards an in-band `error` event |
+| `POST /feedback` | records a 👍/👎 rating (`request_id` of the answer, `rating` `up`/`down`, optional `comment` up to 500 characters) as one line in `logs/feedback.jsonl` (`RAG_FEEDBACK_PATH`); see [17-web-app.md](17-web-app.md) | 201; 422 invalid request |
 | `GET /health` | **liveness**: the process is up | 200 |
 | `GET /ready` | **readiness**: the index is loaded; also reports chunks, embedder and answerer | 200, or 503 with a reason |
 | `GET /metrics` | Prometheus text format | 200 |
@@ -65,6 +66,7 @@ One JSON object per request on stdout:
 | `rag_answers_total` | counter | outcome (answered, refused, fallback) | refusal and fallback rates |
 | `rag_llm_calls_total` | counter | model | call volume per model |
 | `rag_llm_tokens_total` | counter | model, direction (input, output) | **cost**: tokens × the model's price |
+| `rag_feedback_total` | counter | rating (up, down) | user satisfaction over time |
 
 - **Route templates, never raw paths:** `/ask`, and `unmatched` for 404s. A label taken from user input would create one time series per distinct URL (unbounded cardinality).
 - **Cost is tracked as tokens per model**, not dollars: prices change and differ by contract, while tokens are exact. Dollars are a dashboard calculation.

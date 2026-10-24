@@ -1,7 +1,7 @@
 """Request and response models of the HTTP API (Pydantic v2)."""
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -65,3 +65,14 @@ class ErrorResponse(BaseModel):
     request_id: str
     error: str
     detail: Optional[object] = None
+
+
+class FeedbackRequest(BaseModel):
+    request_id: str = Field(..., pattern=r"^[A-Za-z0-9._:-]{1,64}$", description="The request ID of the answer being rated")
+    rating: Literal["up", "down"]
+    comment: Optional[str] = Field(None, max_length=500)
+
+
+class FeedbackResponse(BaseModel):
+    status: str
+    request_id: str
