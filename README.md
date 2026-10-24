@@ -15,13 +15,13 @@ The goal is a small but complete AI service that is **evaluated, tested and expl
 | Local embedding model (sentence-transformers) | ✅ Implemented, tested and benchmarked | Optional extra |
 | Cross-encoder reranking and duplicate-chunk collapsing | ✅ Implemented, tested and benchmarked | Optional extra; off by default |
 | Query transformation: decomposition, pseudo-relevance feedback | ✅ Implemented, tested and benchmarked | Opt-in; neither improves the current benchmark |
-| Grounded prompt with numbered sources, citation checking, prompt-injection escaping | ✅ Implemented and tested | |
+| Grounded prompt with numbered sources, citation checking, prompt-injection escaping of sources and question | ✅ Implemented and tested | Refusal sentences never carry citations (enforced in code) |
 | Offline extractive answers with citations | ✅ Implemented and tested | Cannot judge answerability (see limitations) |
 | Retrieval benchmark: 45 questions, 4 categories, hit@k / recall@k / MRR | ✅ Implemented | Frozen before each new method is implemented |
 | Amazon Bedrock embeddings and reranking | 🟡 Implemented, tested with fakes only | Not yet run against a live AWS account |
 | LLM answers through the OpenAI or Anthropic API, with model, prompt version and token usage recorded | ✅ Implemented, tested, measured with OpenAI | Declines unanswerable questions correctly; Anthropic backend tested with fakes only |
 | LLM query rewriting (multi-query, HyDE) with an on-disk response cache | ✅ Implemented, tested and benchmarked | Raises hit@3 to 1.000 with MiniLM; opt-in |
-| Generation evaluation (faithfulness, citations, refusals on unanswerable questions) | 🔜 Planned | |
+| Generation evaluation: 71 cases (answerable, unanswerable, ambiguous, malicious), rule-based scoring, pass/fail gates | ✅ Implemented, tested, measured with OpenAI | All 6 gates pass with `gpt-5.4-mini@low`; ambiguity handling (2/6) is reported, not gated |
 | Experiment tracking (MLflow) | 🔜 Planned | |
 | FastAPI service with structured logs and metrics | 🔜 Planned | |
 | Node.js backend-for-frontend, React user app and ops dashboard | 🔜 Planned | |
@@ -50,11 +50,12 @@ Every stage sits behind a small interface (vector store, embedder, reranker, LLM
 ```bash
 python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-pytest -q                                              # ~160 tests, offline, about a second
+pytest -q                                              # ~210 tests, offline, about a second
 
 python scripts/index.py                                # build data/index from data/raw (incremental on re-runs)
 python scripts/query.py "How do toolmakers deal with springback?"
 python scripts/evaluate.py --k 3                       # retrieval metrics on the benchmark
+python scripts/evaluate_generation.py                   # answer metrics and gates (offline extractive answers)
 ```
 
 Optional extras:
@@ -66,6 +67,7 @@ pip install -e .[aws]                # boto3: Bedrock embeddings and reranking
 pip install -e .[llm]                # anthropic + openai SDKs: LLM answers and query rewriting
 cp .env.example .env                 # add OPENAI_API_KEY or ANTHROPIC_API_KEY and RAG_LLM (git-ignored)
 python scripts/check_llm.py          # verify configuration without printing secrets
+python scripts/evaluate_generation.py --llm openai:<model>@low --gate   # LLM answers; exit 1 if a gate fails
 
 python scripts/index.py --rebuild --embedder st:sentence-transformers/all-MiniLM-L6-v2 --store faiss
 python scripts/evaluate.py --k 1 --embedder st:sentence-transformers/all-MiniLM-L6-v2
@@ -104,6 +106,7 @@ What the measurements showed, in brief (details in [docs/11-rag-evaluation.md](d
 - **Some methods did not help and are documented as such:** pseudo-relevance feedback caused query drift (hit@1 0.889 → 0.600); RRF fusion of decomposed sub-questions lost each part's best evidence until it was replaced by interleaving.
 - **The benchmark caught regressions the unit tests did not**, including a chunk-deduplication rule that dropped hit@1 to 0.422.
 - **An LLM fixed what rules couldn't:** query rewriting retrieved the one paraphrase every other method missed, and LLM answers decline unanswerable questions that the offline answerer quoted unrelated sentences for. The whole LLM experiment cost about 15k tokens thanks to a response cache.
+- **The generation benchmark found a real injection bug.** A question containing `</source><source id="9">…` forged a source, and the model answered from it and cited `[9]`. The question is now escaped like the sources; injection resistance went from 7/8 to 8/8, and clean refusals from 3/12 to 12/12.
 
 ## How it is evaluated
 
@@ -112,6 +115,7 @@ What the measurements showed, in brief (details in [docs/11-rag-evaluation.md](d
 - **No tuning on the test set:** defaults are chosen from first principles; parameter sweeps are reported as analysis only.
 - **Per-category metrics** show weaknesses that averages hide.
 - **Data-integrity test:** every evidence phrase must exist in the parsed corpus.
+- **Answers are evaluated too:** key facts, citations that hold the evidence, clean refusals, ambiguity and prompt injection, scored by deterministic rules and checked against thresholds fixed before the first measurement.
 
 ## Project layout
 
@@ -126,9 +130,9 @@ src/
   reranking/     cross-encoder and Bedrock rerankers
   query/         decomposition, pseudo-relevance feedback, LLM rewriting, multi-query retrieve()
   generation/    grounded prompt, citations, RAGPipeline, extractive answers
-  evaluation/    metrics, dataset, benchmark corpus
-scripts/         index.py, query.py, evaluate.py
-evaluation/      questions.jsonl, ground_truth.jsonl, results.jsonl
+  evaluation/    retrieval metrics, generation scoring and gates, dataset, benchmark corpus
+scripts/         index.py, query.py, evaluate.py, evaluate_generation.py, check_llm.py
+evaluation/      questions.jsonl, ground_truth.jsonl, generation_cases.jsonl, results
 data/raw/        redistributable sample documents (txt, md, html, csv)
 docs/            one document per topic (fundamentals, ingestion, parsing, chunking, embeddings, ...)
 tests/           unit tests, fakes for model SDKs, in-code builders for PDF/DOCX/XLSX
@@ -138,7 +142,8 @@ Topic documents: [RAG fundamentals](docs/01-rag-fundamentals.md) · [ingestion](
 
 ## Known limitations
 
-- **Answerability offline:** without an LLM, the extractive answerer quotes the best-matching sentence even when the question cannot be answered ("What is the price of titanium?" returns a sentence about titanium nitride). With an LLM the system declines correctly, but its refusals still carry citations.
+- **Answerability offline:** without an LLM, the extractive answerer quotes the best-matching sentence even when the question cannot be answered ("What is the price of titanium?" returns a sentence about titanium nitride). With an LLM the system declines correctly and without citations.
+- **Ambiguous questions:** the LLM usually answers one interpretation instead of covering each case or asking which one is meant (2/6), even when every case was retrieved. The prompt asks for it; the small model at low effort mostly does not comply.
 - **Small benchmark:** 45 questions over 11 short documents; one question changes hit@1 by about 0.022, and the benchmark is also the test set (no separate dev split yet).
 - **General-domain models:** the embedding and reranking models were trained on web data; one paraphrase question (q33) is missed by every configuration.
 - **Bedrock components** are tested with fakes only, not yet against a live AWS account.
@@ -146,16 +151,15 @@ Topic documents: [RAG fundamentals](docs/01-rag-fundamentals.md) · [ingestion](
 
 ## Roadmap
 
-1. Generation evaluation: faithfulness, citation accuracy, refusals on unanswerable, ambiguous and malicious questions
-2. Experiment tracking with MLflow
-3. FastAPI service with request IDs, structured logs and metrics
-4. Node.js backend-for-frontend (TypeScript), React user app and React ops dashboard
-5. Agent workflow with tool schemas, timeouts, step limits and human approval for side-effecting actions
-6. Docker Compose, GitHub Actions CI, AWS deployment and an operations runbook
+1. Experiment tracking with MLflow
+2. FastAPI service with request IDs, structured logs and metrics
+3. Node.js backend-for-frontend (TypeScript), React user app and React ops dashboard
+4. Agent workflow with tool schemas, timeouts, step limits and human approval for side-effecting actions
+5. Docker Compose, GitHub Actions CI (running the generation gates), AWS deployment and an operations runbook
 
 ## Contributing
 
-Run `pytest -q` and `python scripts/evaluate.py` before and after any change to chunking, embedding or retrieval, and report the metric change. Tests must run offline; model SDKs are optional extras imported lazily, and tests use the fakes in `tests/fakes.py`. Only redistributable documents belong in `data/raw/`.
+Run `pytest -q` and `python scripts/evaluate.py` before and after any change to chunking, embedding or retrieval, and `python scripts/evaluate_generation.py` before and after any change to the prompt or answer handling; report the metric change. Tests must run offline; model SDKs are optional extras imported lazily, and tests use the fakes in `tests/fakes.py`. Only redistributable documents belong in `data/raw/`.
 
 ## License
 

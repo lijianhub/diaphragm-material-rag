@@ -6,7 +6,7 @@ from typing import Callable, List, Optional, Sequence
 
 from tokenization import tokenize
 
-from .prompt import Prompt, build_prompt, check_citations, citation_label
+from .prompt import Prompt, build_prompt, check_citations, citation_label, strip_refusal_citations
 
 
 @dataclass
@@ -29,6 +29,7 @@ class Answer:
     model: str = "extractive"  # the model that wrote the answer, as served
     prompt_version: str = ""
     usage: Optional[dict] = None  # token counts when an LLM was called
+    refused: bool = False  # every sentence says the sources lack the answer
 
 
 _SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
@@ -106,7 +107,7 @@ class RAGPipeline:
             results = self._retrieve(question)
 
         if not results:
-            return Answer(text=ExtractiveAnswerer.NOT_FOUND, model="none")
+            return Answer(text=ExtractiveAnswerer.NOT_FOUND, model="none", refused=True)
 
         prompt = build_prompt(question, results, self.max_context_tokens)
         offered = list(results[: prompt.included])
@@ -126,6 +127,8 @@ class RAGPipeline:
         if text is None:
             text = self.extractive.answer(question, offered)
 
+        # A sentence saying the answer is not in the sources must not cite them.
+        text, refused = strip_refusal_citations(text)
         valid, invalid = check_citations(text, len(offered))
         citations = [
             Citation(number=n, label=citation_label(offered[n - 1]), source=offered[n - 1].source, text=offered[n - 1].text)
@@ -142,4 +145,5 @@ class RAGPipeline:
             model=model,
             prompt_version=prompt.version,
             usage=usage,
+            refused=refused,
         )
