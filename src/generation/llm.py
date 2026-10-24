@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union
 
@@ -503,6 +503,28 @@ class CachedLLM:
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
         return text
+
+    def tool_turn(self, system: Optional[str], transcript: List[dict], tools: List[dict]) -> ToolTurn:
+        """Cached tool-calling turn, keyed by model, system, the whole transcript and the
+        tool specs: any change in the conversation or the tools is a miss. A cached turn
+        reports zero tokens."""
+        payload = json.dumps([self.name, "tool_turn", system or "", transcript, tools], ensure_ascii=False, sort_keys=True)
+        key = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        entry = self._entries.get(key)
+        if entry is not None:
+            self.hits += 1
+            turn = entry["turn"]
+            self.last_call = LLMCall(model=turn["model"], stop_reason="cached", input_tokens=0, output_tokens=0)
+            return ToolTurn(turn["text"], [ToolCall(**c) for c in turn["calls"]], turn["items"], turn["model"], turn["stop_reason"], 0, 0)
+        self.misses += 1
+        turn = self.inner.tool_turn(system, transcript, tools)
+        self.last_call = getattr(self.inner, "last_call", None)
+        entry = {"key": key, "model": turn.model, "turn": asdict(turn)}
+        self._entries[key] = entry
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        return turn
 
     def __call__(self, prompt: str) -> str:
         return self.chat(None, prompt)

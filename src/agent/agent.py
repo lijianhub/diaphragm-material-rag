@@ -122,9 +122,11 @@ class Agent:
 
     # -- public ------------------------------------------------------------------------
 
-    def start(self, question: str) -> dict:
+    def start(self, question: str, run_id: Optional[str] = None) -> dict:
+        """``run_id`` is for reproducible benchmarks (a cached rerun needs the same IDs);
+        normally it is a random UUID."""
         run = {
-            "id": uuid.uuid4().hex,
+            "id": run_id or uuid.uuid4().hex,
             "question": question,
             "status": "running",
             "stop_reason": None,

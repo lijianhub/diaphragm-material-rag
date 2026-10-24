@@ -394,3 +394,19 @@ def test_a_transcript_from_another_planner_is_translated_for_each_provider():
 
     assert openai_client.calls[0]["input"][1] == {"type": "function_call", "call_id": "c1", "name": "search_documents", "arguments": '{"query": "q"}'}
     assert anthropic_client.calls[0]["messages"][1] == {"role": "assistant", "content": [{"type": "tool_use", "id": "c1", "name": "search_documents", "input": {"query": "q"}}]}
+
+
+def test_cached_tool_turns_are_free_on_a_rerun_and_miss_when_the_transcript_changes(tmp_path):
+    response = _ns(output=[_ns(type="function_call", call_id="call_1", name="search_documents", arguments='{"query": "burrs"}')],
+                   status="completed", incomplete_details=None, usage=_ns(input_tokens=500, output_tokens=30), model="m-1")
+    client = FakeToolClient([response, response])
+    transcript = [{"role": "user", "content": "q"}]
+
+    first = CachedLLM(OpenAILLM("m-1", client=client), tmp_path / "cache.jsonl").tool_turn("rules", transcript, TOOLS)
+    rerun = CachedLLM(OpenAILLM("m-1", client=client), tmp_path / "cache.jsonl")  # a new process reads the file
+    again = rerun.tool_turn("rules", transcript, TOOLS)
+    changed = rerun.tool_turn("rules", transcript + [{"role": "user", "content": "more"}], TOOLS)
+
+    assert len(client.calls) == 2  # the first call and the changed transcript; the rerun was served from disk
+    assert again.calls[0].arguments == {"query": "burrs"} and again.input_tokens == 0 and first.input_tokens == 500
+    assert (rerun.hits, rerun.misses) == (1, 1) and changed.input_tokens == 500

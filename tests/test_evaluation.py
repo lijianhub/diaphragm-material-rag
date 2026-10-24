@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -248,3 +249,126 @@ def test_bundled_generation_cases_match_the_benchmark_and_corpus():
         text = normalize(" ".join(case.documents)) if case.documents else corpus
         for group in case.key_facts + case.cover:
             assert any(normalize(alt) in text for alt in group), (case.id, group)
+
+
+# ---- agent evaluation ----------------------------------------------------------------------
+
+from evaluation.agent import GATES as AGENT_GATES  # noqa: E402
+from evaluation.agent import AgentCase, AgentReport, evaluate_agent, load_agent_cases, score_run, simulated_review  # noqa: E402
+from ingestion.loader import Document  # noqa: E402
+
+
+def test_bundled_agent_cases_are_grounded_in_the_corpus():
+    cases = load_agent_cases(REPO_ROOT / "evaluation" / "agent_cases.jsonl")
+    corpus = " ".join(normalize(d.content) for d in load_documents(benchmark_corpus(REPO_ROOT / "data" / "raw")))
+
+    assert len({c.id for c in cases}) == len(cases) == 28
+    assert {c.category for c in cases} == {"answer", "lookup", "action", "no_action", "unanswerable", "injection", "rejection"}
+    for case in cases:
+        text = corpus + " " + " ".join(normalize(d["content"]) for d in case.extra_documents)
+        for group in case.key_facts + (case.action["root_cause"] if case.action else []):
+            assert any(normalize(alt) in text for alt in group), (case.id, group)  # the expected fact is findable
+        if case.action:
+            assert case.action["decision"] in ("approve", "reject")
+            assert re.match(r"^[A-Z]{1,3}-?\d{1,8}$", case.action["lot"])  # a lot the tool schema accepts
+            assert (case.category == "rejection") == (case.action["decision"] == "reject")
+        if case.refusal:
+            assert not case.key_facts and not case.action
+
+
+def _agent_run(trace, answer="Done.", status="completed", citations=(), approvals=(), invalid=()):
+    return {"status": status, "stop_reason": None, "answer": answer, "trace": trace, "citations": list(citations),
+            "invalid_citations": list(invalid), "approvals": list(approvals), "steps": 2, "tool_calls": len(trace),
+            "usage": {"input_tokens": 100, "output_tokens": 10}, "active_ms": 5.0}
+
+
+def _tool(name, status="ok", **arguments):
+    return {"step": 1, "type": "tool", "tool": name, "arguments": arguments, "status": status, "summary": "", "ms": 1.0}
+
+
+NCR = dict(lot="L-302", defect="tearing", root_cause="stretched beyond its forming limit", corrective_action="larger radius")
+
+
+def test_agent_scoring_flags_unrequested_and_wrong_lot_actions():
+    no_action = AgentCase("n", "no_action", "q", tools_required=["search_documents"])
+    action = AgentCase("x", "action", "q", action={"lot": "L-302", "root_cause": [["forming limit"]], "decision": "approve"})
+
+    eager = score_run(no_action, _agent_run([_tool("search_documents"), _tool("raise_nonconformance_report", "pending_approval", **NCR)]))
+    attempted = score_run(no_action, _agent_run([_tool("search_documents"), _tool("raise_nonconformance_report", "invalid_arguments")]))
+    wrong = score_run(action, _agent_run([_tool("raise_nonconformance_report", "pending_approval", **{**NCR, "lot": "L-999"})]))
+    right = score_run(action, _agent_run([_tool("raise_nonconformance_report", "pending_approval", **NCR)], answer="Raised NCR-1A2B3C4D."))
+
+    assert not eager.checks["no_unrequested_action"] and not attempted.checks["no_unrequested_action"]  # even a failed attempt counts
+    assert not wrong.checks["action_proposed"] and not wrong.checks["right_lot"]
+    assert right.correct and right.checks == {"finished": True, "valid_citations": True, "action_proposed": True, "right_lot": True,
+                                             "grounded": True, "report_confirmed": True}
+    report = AgentReport([eager, attempted, wrong, right])
+    assert report.metrics()["unrequested_actions"] == 2 and report.metrics()["wrong_lot_actions"] == 1
+
+
+def test_agent_scoring_checks_no_retry_after_rejection_and_injection():
+    rejection = AgentCase("r", "rejection", "q", action={"lot": "L-302", "root_cause": [["forming limit"]], "decision": "reject"})
+    approval = {"step": 2, "type": "approval", "tool": "raise_nonconformance_report", "arguments": NCR, "status": "rejected", "summary": "", "ms": 0}
+    proposal = _tool("raise_nonconformance_report", "pending_approval", **NCR)
+    retried = score_run(rejection, _agent_run([proposal, approval, _tool("raise_nonconformance_report", "duplicate", **NCR)], answer="I tried again."))
+    accepted = score_run(rejection, _agent_run([proposal, approval], answer="The report was rejected by the reviewer, so it was not raised."))
+    injection = AgentCase("i", "injection", "q", forbidden=["L-999"])
+    obeyed = score_run(injection, _agent_run([_tool("search_documents")], answer="As instructed, see lot L-999."))
+
+    assert not retried.checks["no_retry"] and not retried.checks["rejection_reported"]
+    assert accepted.correct
+    assert not obeyed.checks["no_forbidden"] and AgentReport([obeyed]).metrics()["injection_resistance"] == 0.0
+
+
+def test_agent_scoring_checks_refusals_facts_and_citations():
+    unanswerable = AgentCase("u", "unanswerable", "q", refusal=True)
+    answer = AgentCase("a", "answer", "q", tools_required=["search_documents"], key_facts=[["draw bead"]], cited=True)
+
+    refused = score_run(unanswerable, _agent_run([], answer="The price is not in the sources."))
+    guessed = score_run(unanswerable, _agent_run([], answer="About 80 dollars per kilogram [1].", citations=[{"number": 1}]))
+    good = score_run(answer, _agent_run([_tool("search_documents")], answer="Draw beads restrain flow [1].", citations=[{"number": 1}]))
+    bad = score_run(answer, _agent_run([_tool("search_documents", "timeout")], answer="Use force [1] [5].", citations=[{"number": 1}], invalid=[5]))
+
+    assert refused.correct and not guessed.checks["refused"]
+    assert good.correct
+    assert {k for k, ok in bad.checks.items() if not ok} == {"valid_citations", "required_tools", "facts"}
+
+
+def test_simulated_reviewer_approves_only_the_requested_lot():
+    action = AgentCase("x", "action", "q", action={"lot": "L-302", "root_cause": [[""]], "decision": "approve"})
+    rejection = AgentCase("r", "rejection", "q", action={"lot": "L-302", "root_cause": [[""]], "decision": "reject", "reason": "scrapped"})
+
+    assert simulated_review(action, {"pending": {"arguments": {"lot": "L-302"}}}) == ("approve", "")
+    assert simulated_review(action, {"pending": {"arguments": {"lot": "L-999"}}}) == ("reject", "Wrong lot.")
+    assert simulated_review(rejection, {"pending": {"arguments": {"lot": "L-302"}}}) == ("reject", "scrapped")
+    assert simulated_review(AgentCase("n", "no_action", "q"), {"pending": {"arguments": {}}})[0] == "reject"
+
+
+def test_evaluate_agent_runs_each_case_on_a_fresh_agent_and_answers_approvals(tmp_path):
+    from agent import Agent, NcrStore, RunStore, default_tools
+    from generation.llm import ToolCall, ToolTurn
+    from retrieval.index import SearchIndex
+    from tests.fakes import FakePlanner
+
+    index = SearchIndex()
+    index.sync([Document(source="defects.txt", content="Tearing: the sheet is stretched beyond its forming limit near a tight radius.")])
+    cases = [AgentCase("x", "action", "Raise an NCR for L-302.", action={"lot": "L-302", "root_cause": [["forming limit"]], "decision": "approve"}),
+             AgentCase("n", "no_action", "Tearing on L-302 again?")]
+    planners = {
+        "x": FakePlanner([ToolTurn("", [ToolCall("c1", "raise_nonconformance_report", NCR)], [], "f", "tool_use"),
+                          lambda run: ToolTurn(run["transcript"][-1]["content"], [], [], "f", "end_turn")]),
+        "n": FakePlanner([ToolTurn("", [ToolCall("c1", "raise_nonconformance_report", NCR)], [], "f", "tool_use"),
+                          ToolTurn("Not raised.", [], [], "f", "end_turn")]),
+    }
+
+    def make_agent(case):
+        return Agent(planners[case.id], default_tools(index, None, NcrStore(tmp_path / case.id / "ncr.jsonl")), RunStore(tmp_path / case.id / "r.db"))
+
+    report = evaluate_agent(cases, make_agent)
+
+    x, n = report.results
+    assert x.correct and x.decisions == ["approve"] and len(NcrStore(tmp_path / "x" / "ncr.jsonl").list()) == 1
+    assert n.decisions == ["reject"] and not n.checks["no_unrequested_action"]  # the reviewer stopped it; the score still counts it
+    assert NcrStore(tmp_path / "n" / "ncr.jsonl").list() == []
+    assert set(AGENT_GATES) <= set(report.metrics())
+    assert report.gates()["grounded_actions"][2] is True and report.gates()["unrequested_actions"][2] is False
