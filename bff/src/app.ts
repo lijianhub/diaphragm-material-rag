@@ -4,7 +4,8 @@
  * Browser-facing concerns live here so the Python service stays an internal API:
  * request IDs (generated or accepted, forwarded upstream), API-key authentication (a stub
  * until real identity arrives), per-client rate limiting, CORS, request validation, and
- * Server-Sent Events passed through without buffering. When a browser disconnects from a
+ * Server-Sent Events passed through without buffering. The ops dashboard's read-only routes
+ * (/api/ops/*) need an admin key: they show user feedback and service internals. When a browser disconnects from a
  * stream, the upstream request is aborted, so the model stops generating.
  *
  * Upstream calls use Node's built-in fetch, which keeps connections alive and pools them:
@@ -115,6 +116,18 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
     }
   };
 
+  // Ops routes: an admin key is required whenever any authentication is configured. With no
+  // keys at all (local development) they are open, like everything else.
+  const authenticateAdmin = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (config.apiKeys.length === 0 && config.adminKeys.length === 0) return;
+    const token = bearer(request);
+    if (token && config.adminKeys.some((key) => sameSecret(token, key))) return;
+    if (token && config.apiKeys.some((key) => sameSecret(token, key))) {
+      return reply.code(403).send(errorBody(request, "forbidden")); // a valid user, but not an admin
+    }
+    return reply.code(401).send(errorBody(request, "unauthorized"));
+  };
+
   const upstreamHeaders = (request: FastifyRequest) => ({
     "content-type": "application/json",
     "x-request-id": request.id, // one ID across browser, BFF and API logs
@@ -141,14 +154,14 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
     }
   });
 
-  /** Forward a JSON body to the API and pass its status and body back (its errors carry the same request ID). */
-  const proxyJson = async (request: FastifyRequest, reply: FastifyReply, path: string) => {
+  /** Forward the request to the API and pass its status and body back (its errors carry the same request ID). */
+  const proxyJson = async (request: FastifyRequest, reply: FastifyReply, path: string, method: "GET" | "POST" = "POST") => {
     let upstream: Response;
     try {
       upstream = await fetch(`${config.upstreamUrl}${path}`, {
-        method: "POST",
+        method,
         headers: upstreamHeaders(request),
-        body: JSON.stringify(request.body),
+        ...(method === "POST" ? { body: JSON.stringify(request.body) } : {}),
         signal: AbortSignal.timeout(config.upstreamTimeoutMs),
       });
     } catch (error) {
@@ -170,6 +183,19 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
     },
     (request, reply) => proxyJson(request, reply, "/feedback"),
   );
+
+  // Read-only views for the ops dashboard. Only `limit` is forwarded, and only when valid.
+  for (const view of ["summary", "feedback", "evaluations", "ingestion"]) {
+    app.get<{ Querystring: { limit?: number } }>(
+      `/api/ops/${view}`,
+      {
+        schema: { querystring: { type: "object", additionalProperties: false, properties: { limit: { type: "integer", minimum: 1, maximum: 500 } } } },
+        preHandler: authenticateAdmin,
+        config: { rateLimit: { max: config.rateLimitMax, timeWindow: config.rateLimitWindow } },
+      },
+      (request, reply) => proxyJson(request, reply, `/ops/${view}${request.query.limit ? `?limit=${request.query.limit}` : ""}`, "GET"),
+    );
+  }
 
   app.post<{ Body: AskBody }>("/api/ask/stream", askRoute, async (request, reply) => {
     const controller = new AbortController();

@@ -47,7 +47,7 @@ export interface StreamHandlers {
   onFinal: (answer: Answer) => void;
 }
 
-async function errorFrom(response: Response): Promise<ApiError> {
+export async function errorFrom(response: Response): Promise<ApiError> {
   const requestId = response.headers.get("x-request-id") ?? undefined;
   let body: { error?: string; request_id?: string } = {};
   try {
@@ -61,6 +61,7 @@ async function errorFrom(response: Response): Promise<ApiError> {
     return new ApiError(`Too many requests. Try again${retry ? ` in ${retry} s` : " later"}.`, 429, id);
   }
   if (response.status === 401) return new ApiError("Not authorised: the API key is missing or wrong.", 401, id);
+  if (response.status === 403) return new ApiError("This key is not allowed here: the ops dashboard needs an admin key.", 403, id);
   if (response.status === 400 || response.status === 422) return new ApiError("The question was not accepted (empty or too long).", response.status, id);
   if (response.status === 503) return new ApiError("The service is not ready yet (no document index).", 503, id);
   if (response.status === 502 || response.status === 504) return new ApiError("The answering service is unavailable. Please try again.", response.status, id);

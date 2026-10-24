@@ -1,5 +1,6 @@
 import json
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -372,3 +373,105 @@ def test_invalid_feedback_is_rejected(payload, tmp_path):
 
     assert response.status_code == 422 and response.json()["error"] == "invalid_request"
     assert not path.exists()
+
+
+# ---- ops dashboard ---------------------------------------------------------------------
+
+
+def test_histogram_quantile_interpolates_inside_the_bucket_like_prometheus():
+    from api.metrics import Histogram
+
+    h = Histogram("t", "test", buckets=(0.1, 0.2, 0.5))
+    assert h.quantile(0.5) is None  # no observations
+    for value in (0.05, 0.05, 0.15, 0.15):
+        h.observe(value)
+    over = Histogram("o", "test", buckets=(0.1, 0.2, 0.5))
+    over.observe(9.0)
+
+    assert h.quantile(0.5) == pytest.approx(0.1)  # rank 2 = the top of the first bucket
+    assert h.quantile(0.75) == pytest.approx(0.15)  # rank 3 = halfway through the second
+    assert over.quantile(0.95) == 0.5  # beyond the last bucket: its bound, a lower limit
+
+
+def test_ops_summary_counts_user_traffic_but_not_health_checks_or_its_own_polling():
+    clock = iter([1000.0, 1020.0, 1042.5])  # start-up, then one reading per snapshot
+    client = TestClient(create_app(Settings(index_dir="none"), index=_index(), llm=FakeLLM("Over-form it [1]."), metrics=Metrics(clock=lambda: next(clock))))
+
+    client.post("/ask", json={"question": "How is springback compensated?"})
+    client.post("/ask", json={"question": "   "})  # 422
+    client.get("/health")
+    client.get("/ops/summary")
+    summary = client.get("/ops/summary").json()
+
+    assert summary["traffic"] == {"requests": 2, "client_errors": 1, "server_errors": 0}
+    routes = {r["route"]: r for r in summary["routes"]}
+    assert routes["/ask"]["count"] == 2 and routes["/ask"]["p95_ms"] is not None
+    assert routes["/health"]["count"] == 1 and routes["/ops/summary"]["count"] == 1  # listed, not traffic
+    assert summary["answers"] == {"answered": 1, "refused": 0, "fallback": 0}
+    assert [m["calls"] for m in summary["models"]] == [1]
+    assert {s["stage"] for s in summary["stages"]} >= {"retrieval", "generation"}
+    assert summary["ready"] is True and summary["index_chunks"] == 2 and summary["uptime_s"] == 42.5
+
+
+def test_ops_feedback_returns_recent_ratings_newest_first_and_skips_damaged_lines(tmp_path):
+    path = tmp_path / "feedback.jsonl"
+    lines = [
+        json.dumps({"ts": "t1", "rating": "up", "comment": None, "answer_request_id": "a1", "feedback_request_id": "f1"}),
+        "{not json",
+        json.dumps({"ts": "t2", "rating": "down", "comment": "wrong alloy", "answer_request_id": "a2", "feedback_request_id": "f2"}),
+        json.dumps({"ts": "t3", "rating": "up", "comment": None, "answer_request_id": "a3", "feedback_request_id": "f3"}),
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    client = TestClient(create_app(Settings(index_dir="none", feedback_path=str(path)), index=_index()))
+
+    body = client.get("/ops/feedback", params={"limit": 2}).json()
+    missing = TestClient(create_app(Settings(index_dir="none", feedback_path=str(tmp_path / "none.jsonl")), index=_index())).get("/ops/feedback").json()
+
+    assert body["counts"] == {"up": 2, "down": 1} and body["total"] == 4 and body["malformed"] == 1
+    assert [r["answer_request_id"] for r in body["recent"]] == ["a3", "a2"]
+    assert body["recent"][1]["comment"] == "wrong alloy" and "feedback_request_id" not in body["recent"][0]
+    assert missing == {"total": 0, "malformed": 0, "counts": {"up": 0, "down": 0}, "recent": []}
+    assert client.get("/ops/feedback", params={"limit": 0}).status_code == 422
+
+
+def test_ops_evaluations_lists_runs_newest_first_with_a_data_version(tmp_path):
+    path = tmp_path / "runs.jsonl"
+    data = {"data.questions.sha256": "aaa", "data.corpus.fingerprint": "ccc"}
+    runs = [
+        {"run_id": "r1", "time": "2026-10-20T10:00:00+00:00", "name": "retrieval old", "params": {"kind": "retrieval"},
+         "metrics": {"hit@1": 0.8}, "tags": {"git_commit": "0123456789abcdef", "git_dirty": "false", **data}},
+        {"run_id": "r2", "time": "2026-10-21T10:00:00+00:00", "name": "retrieval new", "params": {"kind": "retrieval"},
+         "metrics": {"hit@1": 0.9}, "tags": {"git_commit": "fedcba9876543210", "git_dirty": "true", **data}},
+        {"run_id": "r3", "time": "2026-10-22T10:00:00+00:00", "name": "generation", "params": {"kind": "generation"},
+         "metrics": {"gates_passed": 6.0}, "tags": {"git_commit": "fedcba9876543210", "git_dirty": "false", "gates": "pass",
+                                                    **data, "data.questions.sha256": "bbb"}},
+    ]
+    path.write_text("".join(json.dumps(r) + "\n" for r in runs), encoding="utf-8")
+    client = TestClient(create_app(Settings(index_dir="none", runs_path=str(path)), index=_index()))
+
+    body = client.get("/ops/evaluations").json()
+    by_id = {r["run_id"]: r for r in body["runs"]}
+
+    assert [r["run_id"] for r in body["runs"]] == ["r3", "r2", "r1"]
+    assert by_id["r2"]["git_commit"] == "fedcba9" and by_id["r2"]["git_dirty"] is True and by_id["r2"]["kind"] == "retrieval"
+    assert by_id["r1"]["data_version"] == by_id["r2"]["data_version"]  # same data: comparable
+    assert by_id["r3"]["data_version"] != by_id["r1"]["data_version"]  # edited questions: not comparable
+    assert by_id["r3"]["gates"] == "pass" and by_id["r3"]["metrics"] == {"gates_passed": 6.0}
+
+
+def test_ops_ingestion_reports_the_last_indexing_run(tmp_path):
+    from ingestion.loader import IngestFailure, IngestResult
+    from ingestion.report import build_report, write_report
+
+    empty = TestClient(create_app(Settings(index_dir=str(tmp_path)), index=_index())).get("/ops/ingestion").json()
+    result = IngestResult(documents=DOCS, failures=[IngestFailure(str(tmp_path / "raw" / "scan.pdf"), "no text layer")],
+                          duplicates=[(str(tmp_path / "raw" / "copy.txt"), str(tmp_path / "raw" / "forming.txt"))])
+    write_report(build_report(result, {"added": 2}, 0.123, portable=lambda s: Path(s).relative_to(tmp_path).as_posix()), tmp_path)
+
+    body = TestClient(create_app(Settings(index_dir=str(tmp_path)), index=_index())).get("/ops/ingestion").json()
+
+    assert empty["report"] is None and "scripts/index.py" in empty["reason"]
+    report = body["report"]
+    assert report["loaded"] == 2 and report["seconds"] == 0.12 and report["sync"] == {"added": 2}
+    assert report["failed"] == [{"source": "raw/scan.pdf", "reason": "no text layer"}]  # repository-relative
+    assert report["duplicates"] == [{"source": "raw/copy.txt", "same_as": "raw/forming.txt"}]

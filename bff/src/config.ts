@@ -6,6 +6,8 @@ export interface Config {
   port: number;
   /** Accepted API keys (Bearer tokens). Empty means authentication is off (local development only). */
   apiKeys: string[];
+  /** Keys for the ops dashboard routes (/api/ops/*). A user key is not enough. */
+  adminKeys: string[];
   /** Requests per client per window on the /api/ask routes. */
   rateLimitMax: number;
   rateLimitWindow: string;
@@ -28,6 +30,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     host: env.BFF_HOST ?? "127.0.0.1",
     port: Number(env.BFF_PORT ?? 3000),
     apiKeys: list(env.BFF_API_KEYS),
+    adminKeys: list(env.BFF_ADMIN_KEYS),
     rateLimitMax: Number(env.BFF_RATE_LIMIT_MAX ?? 30),
     rateLimitWindow: env.BFF_RATE_LIMIT_WINDOW ?? "1 minute",
     corsOrigins: env.BFF_CORS_ORIGINS === undefined ? ["http://localhost:5173"] : list(env.BFF_CORS_ORIGINS),

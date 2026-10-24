@@ -8,9 +8,14 @@ from __future__ import annotations
 
 import threading
 from bisect import bisect_left
-from typing import Dict, Iterable, List, Sequence, Tuple
+import time
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 LabelKey = Tuple[Tuple[str, str], ...]
+
+# Routes that carry user traffic. Health checks, scrapes and the ops dashboard's own polling
+# are excluded from the traffic totals, or watching the dashboard would inflate its numbers.
+TRAFFIC_ROUTES = ("/ask", "/ask/stream", "/feedback")
 
 # Seconds. Retrieval takes milliseconds and LLM calls take seconds, so buckets span both.
 DEFAULT_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
@@ -74,6 +79,26 @@ class Histogram:
     def count(self, **labels: str) -> int:
         return self.series.get(_key(labels), {"count": 0})["count"]
 
+    def quantile(self, q: float, **labels: str) -> Optional[float]:
+        """Estimate a quantile the way Prometheus' ``histogram_quantile`` does: find the
+        bucket holding the q-th observation and interpolate linearly inside it. The result
+        is only as precise as the bucket is wide. Above the last bucket, the last bound is
+        returned (a lower limit). None when there are no observations."""
+        s = self.series.get(_key(labels))
+        if not s or s["count"] == 0:
+            return None
+        rank = q * s["count"]
+        cumulative, lower = 0, 0.0
+        for bound, n in zip(self.buckets, s["counts"]):
+            if n and cumulative + n >= rank:
+                return lower + (bound - lower) * (rank - cumulative) / n
+            cumulative += n
+            lower = bound
+        return self.buckets[-1]
+
+    def label_values(self, label: str) -> List[str]:
+        return sorted({v for key in self.series for k, v in key if k == label})
+
     def render(self) -> List[str]:
         lines = [f"# HELP {self.name} {self.help}", f"# TYPE {self.name} histogram"]
         for key, s in sorted(self.series.items()):
@@ -90,8 +115,10 @@ class Histogram:
 class Metrics:
     """All metrics of one API instance. Thread-safe: FastAPI runs sync endpoints in a pool."""
 
-    def __init__(self):
+    def __init__(self, clock=time.time):
         self._lock = threading.Lock()
+        self.started_at = clock()
+        self._clock = clock
         self.requests = Counter("http_requests_total", "HTTP requests by method, route and status code.")
         self.request_seconds = Histogram("http_request_duration_seconds", "HTTP request latency by route.")
         self.stage_seconds = Histogram("rag_stage_duration_seconds", "Time spent per pipeline stage (retrieval, generation).")
@@ -120,6 +147,50 @@ class Metrics:
     def record_feedback(self, rating: str) -> None:
         with self._lock:
             self.feedback.inc(rating=rating)
+
+    def snapshot(self) -> dict:
+        """The registry as JSON for the ops dashboard: totals since the process started and
+        latency percentiles estimated from the histograms. Counters reset on restart."""
+        ms = lambda seconds: None if seconds is None else round(seconds * 1000, 1)  # noqa: E731
+        with self._lock:
+            routes: Dict[str, dict] = {}
+            for key, n in self.requests.values.items():
+                labels = dict(key)
+                r = routes.setdefault(labels["route"], {"route": labels["route"], "count": 0, "client_errors": 0, "server_errors": 0})
+                r["count"] += int(n)
+                status = int(labels["status"])
+                if 400 <= status < 500:
+                    r["client_errors"] += int(n)
+                elif status >= 500:
+                    r["server_errors"] += int(n)
+            for r in routes.values():
+                r["p50_ms"] = ms(self.request_seconds.quantile(0.5, route=r["route"]))
+                r["p95_ms"] = ms(self.request_seconds.quantile(0.95, route=r["route"]))
+            traffic = [r for name, r in routes.items() if name in TRAFFIC_ROUTES]
+            models: Dict[str, dict] = {}
+            for key, n in self.llm_calls.values.items():
+                models.setdefault(dict(key)["model"], {"calls": 0, "input_tokens": 0, "output_tokens": 0})["calls"] = int(n)
+            for key, n in self.tokens.values.items():
+                labels = dict(key)
+                models.setdefault(labels["model"], {"calls": 0, "input_tokens": 0, "output_tokens": 0})[f"{labels['direction']}_tokens"] = int(n)
+            return {
+                "started_at": self.started_at,
+                "uptime_s": round(self._clock() - self.started_at, 1),
+                "traffic": {
+                    "requests": sum(r["count"] for r in traffic),
+                    "client_errors": sum(r["client_errors"] for r in traffic),
+                    "server_errors": sum(r["server_errors"] for r in traffic),
+                },
+                "routes": sorted(routes.values(), key=lambda r: r["route"]),
+                "stages": [
+                    {"stage": stage, "count": self.stage_seconds.count(stage=stage),
+                     "p50_ms": ms(self.stage_seconds.quantile(0.5, stage=stage)), "p95_ms": ms(self.stage_seconds.quantile(0.95, stage=stage))}
+                    for stage in self.stage_seconds.label_values("stage")
+                ],
+                "answers": {o: int(self.answers.get(outcome=o)) for o in ("answered", "refused", "fallback")},
+                "models": [{"model": m, **v} for m, v in sorted(models.items())],
+                "feedback": {r: int(self.feedback.get(rating=r)) for r in ("up", "down")},
+            }
 
     def render(self) -> str:
         with self._lock:

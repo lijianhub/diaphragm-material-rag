@@ -7,6 +7,9 @@ Endpoints:
 - ``GET /health``   liveness: the process is up
 - ``GET /ready``    readiness: the index is loaded (503 otherwise)
 - ``GET /metrics``  Prometheus text format: requests, latency, stage timings, outcomes, LLM calls, tokens
+- ``GET /ops/...``  read-only JSON for the ops dashboard: ``summary`` (the metrics with latency
+  percentiles), ``feedback``, ``evaluations`` (tracked runs) and ``ingestion`` (last indexing run).
+  Internal: the BFF puts them behind an admin key.
 
 Every response carries ``X-Request-ID`` (the caller's, if valid, or a new one), and every
 request produces one JSON log line. The question text is never logged, only its length and
@@ -29,7 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
@@ -37,6 +40,7 @@ from generation import RAGPipeline
 from generation.prompt import citation_label
 
 from .metrics import Metrics
+from .ops import read_feedback, read_runs
 from .schemas import (
     AskRequest,
     AskResponse,
@@ -62,6 +66,7 @@ class Settings:
     llm_timeout: float = 30.0  # seconds per LLM call; the SDK default (120 s) is too long for a user request
     llm_max_retries: int = 1
     feedback_path: str = "logs/feedback.jsonl"  # git-ignored; one JSON object per rating
+    runs_path: str = "runs/runs.jsonl"  # tracked evaluation runs (--track jsonl), for the ops dashboard
 
     @classmethod
     def from_env(cls, base_dir: Optional[Path] = None) -> "Settings":
@@ -72,6 +77,7 @@ class Settings:
             llm_timeout=float(os.environ.get("RAG_LLM_TIMEOUT", "30")),
             llm_max_retries=int(os.environ.get("RAG_LLM_MAX_RETRIES", "1")),
             feedback_path=os.environ.get("RAG_FEEDBACK_PATH") or str(base / "logs" / "feedback.jsonl"),
+            runs_path=os.environ.get("RAG_RUNS_PATH") or str(base / "runs" / "runs.jsonl"),
         )
 
 
@@ -323,5 +329,38 @@ def create_app(settings: Optional[Settings] = None, *, index=None, llm=None, met
     @app.get("/metrics", response_class=PlainTextResponse)
     def prometheus_metrics():
         return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")
+
+    # ---- ops dashboard (read-only) ----------------------------------------------------
+
+    @app.get("/ops/summary")
+    def ops_summary():
+        """Service health since start-up: traffic, errors, latency percentiles per route and
+        stage, answer outcomes, LLM calls and tokens per model, feedback."""
+        index = app.state.index
+        return {
+            **metrics.snapshot(),
+            "ready": index is not None,
+            "not_ready_reason": app.state.not_ready,
+            "answerer": answerer,
+            "index_chunks": len(index) if index is not None else 0,
+        }
+
+    @app.get("/ops/feedback")
+    def ops_feedback(limit: int = Query(50, ge=1, le=200)):
+        return read_feedback(settings.feedback_path, limit)
+
+    @app.get("/ops/evaluations")
+    def ops_evaluations(limit: int = Query(100, ge=1, le=500)):
+        return read_runs(settings.runs_path, limit)
+
+    @app.get("/ops/ingestion")
+    def ops_ingestion():
+        from ingestion.report import read_report
+
+        try:
+            report = read_report(settings.index_dir)
+        except (OSError, ValueError):
+            return {"report": None, "reason": "the ingestion report could not be read"}
+        return {"report": report, "reason": None if report else "no ingestion report: run scripts/index.py"}
 
     return app

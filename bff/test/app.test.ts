@@ -31,6 +31,8 @@ class FakeUpstream {
           }
         } else if (req.url === "/feedback") {
           res.writeHead(201, { "content-type": "application/json" }).end(JSON.stringify({ status: "recorded", request_id: id }));
+        } else if (req.url?.startsWith("/ops/")) {
+          res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ path: req.url, method: req.method }));
         } else if (req.url === "/ask/stream") {
           res.writeHead(200, { "content-type": "text/event-stream" });
           res.on("close", () => {
@@ -278,5 +280,53 @@ describe("GET /api/ready", () => {
     expect(ready.statusCode).toBe(200);
     expect(ready.json()).toEqual({ ready: true, upstream: { ready: true } });
     expect(down.statusCode).toBe(503);
+  });
+});
+
+describe("GET /api/ops/*", () => {
+  it.each(["summary", "feedback", "evaluations", "ingestion"])("forwards %s to the API as a GET", async (view) => {
+    const response = await app.inject({ url: `/api/ops/${view}`, headers: { "x-request-id": "ops-1" } });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ path: `/ops/${view}`, method: "GET" });
+    expect(upstream.requests[0]!.headers["x-request-id"]).toBe("ops-1");
+  });
+
+  it("forwards a valid limit, rejects an invalid one, and never forwards other parameters", async () => {
+    const ok = await app.inject({ url: "/api/ops/feedback?limit=20" });
+    const bad = await Promise.all(["limit=0", "limit=501", "limit=abc"].map((q) => app.inject({ url: `/api/ops/feedback?${q}` })));
+    const extra = await app.inject({ url: "/api/ops/feedback?path=../../etc" }); // stripped, like unknown body fields
+
+    expect(ok.json().path).toBe("/ops/feedback?limit=20");
+    expect(bad.map((r) => r.statusCode)).toEqual([400, 400, 400]);
+    expect(extra.json().path).toBe("/ops/feedback");
+    expect(upstream.requests).toHaveLength(2);
+  });
+
+  it("needs an admin key when authentication is on: a user key is forbidden", async () => {
+    await app.close();
+    app = await buildApp(config({ apiKeys: ["user-key"], adminKeys: ["admin-key"] }));
+    const as = (key?: string) => app.inject({ url: "/api/ops/summary", headers: key ? { authorization: `Bearer ${key}` } : {} });
+
+    expect((await as()).statusCode).toBe(401);
+    expect((await as("wrong")).statusCode).toBe(401);
+    expect((await as("user-key")).statusCode).toBe(403);
+    expect((await as("admin-key")).statusCode).toBe(200);
+    expect(upstream.requests).toHaveLength(1);
+  });
+
+  it("stays closed when only user keys are configured", async () => {
+    await app.close();
+    app = await buildApp(config({ apiKeys: ["user-key"] }));
+
+    expect((await app.inject({ url: "/api/ops/summary", headers: { authorization: "Bearer user-key" } })).statusCode).toBe(403);
+    expect(upstream.requests).toHaveLength(0);
+  });
+
+  it("returns 502 when the API is unreachable", async () => {
+    await app.close();
+    app = await buildApp(config({ upstreamUrl: "http://127.0.0.1:1" }));
+
+    expect((await app.inject({ url: "/api/ops/summary" })).statusCode).toBe(502);
   });
 });

@@ -1,6 +1,5 @@
 import type { Answer } from "../lib/api";
-
-const ms = (value?: number) => (value === undefined ? "–" : value >= 1000 ? `${(value / 1000).toFixed(1)} s` : `${Math.round(value)} ms`);
+import { ms } from "../lib/format";
 
 /** Provenance of the answer: which model and prompt wrote it, what it cost, how long it took. */
 export function RunDetails({ answer }: { answer: Answer }) {

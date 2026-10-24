@@ -29,6 +29,7 @@ load_env_file()  # local .env (git-ignored); real environment variables win
 
 from embedding import create_embedder
 from ingestion.loader import Document, ingest
+from ingestion.report import build_report, write_report
 from reranking import create_reranker
 from retrieval.index import MANIFEST_FILE, SearchIndex
 from vectorstore import STORE_KINDS
@@ -92,7 +93,11 @@ def main() -> None:
 
     print(f"documents={len(documents)} {stats}")
     print(f"index now has {len(index.document_ids())} documents, {len(index)} chunks; saved to {args.out}")
-    print(f"took {time.perf_counter() - started:.2f}s")
+    seconds = time.perf_counter() - started
+    print(f"took {seconds:.2f}s")
+    # Kept next to the index so the ops dashboard can show failures after this output is gone.
+    portable = lambda source: _portable(Document(source=source, content=""), REPO_ROOT).source  # noqa: E731
+    write_report(build_report(result, stats, seconds, portable), args.out)
 
 
 if __name__ == "__main__":

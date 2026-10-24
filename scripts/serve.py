@@ -10,6 +10,8 @@ Configuration comes from the environment (or the git-ignored .env):
     RAG_LLM              e.g. openai:<model>@low; unset → offline extractive answers
     RAG_LLM_TIMEOUT      seconds per LLM call (default 30)
     RAG_LLM_MAX_RETRIES  SDK retries per LLM call (default 1)
+    RAG_FEEDBACK_PATH    feedback file (default: logs/feedback.jsonl)
+    RAG_RUNS_PATH        tracked evaluation runs for the ops dashboard (default: runs/runs.jsonl)
 
 Logs are one JSON object per line on stdout, ready for a log collector.
 """
@@ -38,6 +40,8 @@ def main() -> None:
     args = parser.parse_args()
 
     os.environ.setdefault("RAG_INDEX_DIR", str(REPO_ROOT / "data" / "index"))
+    os.environ.setdefault("RAG_FEEDBACK_PATH", str(REPO_ROOT / "logs" / "feedback.jsonl"))
+    os.environ.setdefault("RAG_RUNS_PATH", str(REPO_ROOT / "runs" / "runs.jsonl"))
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 
     import uvicorn
