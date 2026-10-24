@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from api import Metrics, Settings, create_app  # noqa: E402
 from ingestion.loader import Document  # noqa: E402
 from retrieval.index import SearchIndex  # noqa: E402
-from tests.fakes import FakeLLM  # noqa: E402
+from tests.fakes import FakeLLM, FakeStreamingLLM  # noqa: E402
 
 DOCS = [
     Document(source="forming.txt", content="Springback is compensated by over-forming the profile by a small angle."),
@@ -184,3 +184,84 @@ def test_settings_come_from_the_environment(monkeypatch, tmp_path):
 
     assert settings.llm == "openai:some-model@low" and settings.llm_timeout == 12.5
     assert settings.index_dir == str(tmp_path / "data" / "index")
+
+
+# ---- streaming ----------------------------------------------------------------
+
+
+def _sse_events(text):
+    events = []
+    for block in text.strip().split("\n\n"):
+        fields = dict(line.split(": ", 1) for line in block.splitlines())
+        events.append((fields["event"], json.loads(fields["data"])))
+    return events
+
+
+def test_stream_sends_sources_deltas_and_a_final_equal_to_ask():
+    pieces = ("Dies are over-formed ", "by a small angle [1].")
+    client = _client(llm=FakeStreamingLLM(pieces))
+
+    response = client.post("/ask/stream", json={"question": "How is springback compensated?", "top_k": 2}, headers={"X-Request-ID": "s-1"})
+    events = _sse_events(response.text)
+    whole = _client(llm=FakeLLM("".join(pieces))).post("/ask", json={"question": "How is springback compensated?", "top_k": 2}).json()
+
+    assert response.status_code == 200 and response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["X-Request-ID"] == "s-1" and response.headers["cache-control"] == "no-cache"
+    assert [e for e, _ in events] == ["sources", "delta", "delta", "final"]
+    assert events[0][1]["request_id"] == "s-1" and len(events[0][1]["sources"]) == 2
+    final = events[-1][1]
+    for key in ("answer", "refused", "citations", "sources", "invalid_citations", "model", "prompt_version"):
+        assert final[key] == whole[key], key
+    assert "first_token_ms" in final["timings_ms"]
+
+
+def test_streamed_refusal_is_cleaned_in_the_final_event():
+    client = _client(llm=FakeStreamingLLM(("The price is not in the sources. ", "[1][2]")))
+
+    events = _sse_events(client.post("/ask/stream", json={"question": "Price of titanium?"}).text)
+
+    assert events[-1][1]["answer"] == "The price is not in the sources." and events[-1][1]["citations"] == []
+
+
+def test_stream_rejects_invalid_requests_and_waits_for_an_index_like_ask():
+    assert _client().post("/ask/stream", json={"question": " "}).status_code == 422
+    not_ready = _client(index=None).post("/ask/stream", json={"question": "anything?"})
+    assert not_ready.status_code == 503 and not_ready.json()["error"] == "not_ready"
+
+
+def test_an_error_inside_the_stream_ends_with_an_error_event_without_internals():
+    class BrokenIndex:
+        embedder = None
+
+        def __len__(self):
+            return 1
+
+        def search(self, *args, **kwargs):
+            raise RuntimeError("database password is hunter2")
+
+    response = _client(index=BrokenIndex()).post("/ask/stream", json={"question": "anything?"}, headers={"X-Request-ID": "s-err"})
+
+    assert response.status_code == 200  # the status line went out before the error happened
+    assert _sse_events(response.text) == [("error", {"request_id": "s-err", "error": "internal_error"})]
+    assert "hunter2" not in response.text
+
+
+def test_a_finished_stream_logs_one_completion_line_without_the_question(caplog):
+    client = _client(llm=FakeStreamingLLM(("Over-formed ", "[1].")))
+
+    with caplog.at_level(logging.INFO, logger="rag.api"):
+        client.post("/ask/stream", json={"question": "springback on part 4711?"}, headers={"X-Request-ID": "s-2"})
+    lines = [json.loads(r.getMessage()) for r in caplog.records if r.name == "rag.api"]
+    stream = [line for line in lines if line["event"] == "stream"]
+
+    assert len(stream) == 1
+    assert stream[0]["request_id"] == "s-2" and stream[0]["completed"] and not stream[0]["disconnected"]
+    assert stream[0]["deltas"] == 2 and "first_token_ms" in stream[0]
+    assert "4711" not in json.dumps(lines)
+
+
+def test_stream_records_time_to_first_token_in_metrics():
+    client = _client(llm=FakeStreamingLLM())
+    client.post("/ask/stream", json={"question": "How is springback compensated?"})
+
+    assert 'rag_stage_duration_seconds_count{stage="first_token"} 1' in client.get("/metrics").text

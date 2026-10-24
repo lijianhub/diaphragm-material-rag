@@ -264,3 +264,53 @@ def test_cached_llm_works_as_a_plain_function_for_rewriting(tmp_path):
 
     assert llm("rewrite this") == "reply to rewrite this"
     assert llm.name == "counting"
+
+
+# ---- streaming ----------------------------------------------------------------
+
+
+def test_openai_stream_yields_deltas_and_records_usage():
+    client = FakeOpenAIClient(text="Dies are over-formed by a small angle [1].")
+    llm = OpenAILLM(model="m", reasoning_effort="low", client=client)
+
+    pieces = list(llm.stream_chat("rules", "question"))
+
+    assert len(pieces) > 1 and "".join(pieces) == "Dies are over-formed by a small angle [1]."
+    assert client.calls[0]["stream"] is True and client.calls[0]["instructions"] == "rules"
+    assert "temperature" not in client.calls[0]
+    assert (llm.last_call.input_tokens, llm.last_call.output_tokens) == (900, 60)
+    assert client.stream_closed
+
+
+def test_openai_stream_refusal_raises():
+    with pytest.raises(LLMRefusal):
+        list(OpenAILLM(model="m", client=FakeOpenAIClient(refusal="I can't help with that.")).stream_chat(None, "q"))
+
+
+def test_openai_stream_is_closed_when_the_consumer_stops_early():
+    # A user who closes the page must not leave the model generating (and billing) to the end.
+    client = FakeOpenAIClient(text="one two three four")
+    stream = OpenAILLM(model="m", client=client).stream_chat(None, "q")
+
+    next(stream)
+    stream.close()
+
+    assert client.stream_closed
+
+
+def test_anthropic_stream_yields_text_and_keeps_the_refusal_fallback():
+    client = FakeAnthropicClient(text="Over-formed by a small angle [1].")
+    llm = AnthropicLLM(client=client)
+
+    text = "".join(llm.stream_chat("rules", "question"))
+
+    assert text == "Over-formed by a small angle [1]."
+    assert client.calls[0]["path"] == "beta" and client.calls[0]["fallbacks"] == "default"
+    assert client.calls[0]["system"] == "rules"
+    assert (llm.last_call.input_tokens, llm.last_call.output_tokens) == (1200, 45)
+    assert client.stream_closed
+
+
+def test_anthropic_stream_refusal_raises_after_the_stream():
+    with pytest.raises(LLMRefusal):
+        list(AnthropicLLM(client=FakeAnthropicClient(stop_reason="refusal", refusal_category="cyber")).stream_chat(None, "q"))

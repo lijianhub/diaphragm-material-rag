@@ -88,6 +88,29 @@ class FakeLLM:
         return self.reply
 
 
+class FakeStreamingLLM(FakeLLM):
+    """A FakeLLM that also streams: ``stream_chat`` yields ``pieces`` one by one, can fail
+    after ``fail_after`` pieces, and records whether the stream was closed early."""
+
+    def __init__(self, pieces=("Answer ", "[1]."), fail_after=None, error=None):
+        super().__init__("".join(pieces))
+        self.pieces, self.fail_after, self.stream_error = list(pieces), fail_after, error
+        self.closed_early = False
+        self.finished = False
+
+    def stream_chat(self, system, user):
+        self.prompts.append(user)
+        try:
+            for i, piece in enumerate(self.pieces):
+                if self.fail_after is not None and i == self.fail_after:
+                    raise self.stream_error or RuntimeError("stream broke")
+                yield piece
+            self.finished = True
+        except GeneratorExit:
+            self.closed_early = True
+            raise
+
+
 class FakeAnthropicClient:
     """Stands in for anthropic.Anthropic(): records messages.create / beta.messages.create
     calls and returns a response shaped like the SDK's (thinking + text blocks, usage)."""
@@ -99,8 +122,34 @@ class FakeAnthropicClient:
         self._ns = SimpleNamespace
         self.text, self.stop_reason, self.model = text, stop_reason, model
         self.refusal_category, self.error = refusal_category, error
-        self.messages = SimpleNamespace(create=lambda **kw: self._create("messages", kw))
-        self.beta = SimpleNamespace(messages=SimpleNamespace(create=lambda **kw: self._create("beta", kw)))
+        self.messages = SimpleNamespace(create=lambda **kw: self._create("messages", kw), stream=lambda **kw: self._stream("messages", kw))
+        self.beta = SimpleNamespace(
+            messages=SimpleNamespace(create=lambda **kw: self._create("beta", kw), stream=lambda **kw: self._stream("beta", kw))
+        )
+        self.stream_closed = False
+
+    def _stream(self, path, kwargs):
+        client = self
+        response = self._create(path, {**kwargs, "stream": True})
+        words = [w + " " for w in self.text.split(" ")]
+        words[-1] = words[-1].rstrip()
+
+        class Manager:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                client.stream_closed = True
+                return False
+
+            @property
+            def text_stream(self):
+                return iter(words)
+
+            def get_final_message(self):
+                return response
+
+        return Manager()
 
     def _create(self, path, kwargs):
         self.calls.append({"path": path, **kwargs})
@@ -133,10 +182,32 @@ class FakeOpenAIClient:
             model=model,
         )
         self.responses = ns(create=self._create)
+        self.stream_closed = False
 
     def _create(self, **kwargs):
         self.calls.append(kwargs)
-        return self._response
+        if not kwargs.get("stream"):
+            return self._response
+        from types import SimpleNamespace as ns
+
+        client, response = self, self._response
+        message = response.output[1].content[0]
+        if message.type == "refusal":
+            events = [ns(type="response.refusal.delta", delta=message.refusal)]
+        else:
+            words = [w + " " for w in message.text.split(" ")]
+            words[-1] = words[-1].rstrip()
+            events = [ns(type="response.output_text.delta", delta=w) for w in words]
+        events.append(ns(type="response.incomplete" if response.status == "incomplete" else "response.completed", response=response))
+
+        class Stream:
+            def __iter__(self):
+                return iter(events)
+
+            def close(self):
+                client.stream_closed = True
+
+        return Stream()
 
 
 class FakeMlflow:

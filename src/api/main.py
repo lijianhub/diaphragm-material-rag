@@ -2,6 +2,7 @@
 
 Endpoints:
 - ``POST /ask``     answer a question with citations, model, prompt version, tokens and stage timings
+- ``POST /ask/stream``  the same answer as Server-Sent Events: ``sources``, ``delta``..., ``final`` (or ``error``)
 - ``GET /health``   liveness: the process is up
 - ``GET /ready``    readiness: the index is loaded (503 otherwise)
 - ``GET /metrics``  Prometheus text format: requests, latency, stage timings, outcomes, LLM calls, tokens
@@ -28,7 +29,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from generation import RAGPipeline
 from generation.prompt import citation_label
@@ -71,6 +72,50 @@ def _log(fields: dict) -> None:
 def _error(request_id: str, status: int, error: str, detail: Any = None) -> JSONResponse:
     body = ErrorResponse(request_id=request_id, error=error, detail=detail).model_dump()
     return JSONResponse(status_code=status, content=body, headers={"X-Request-ID": request_id})
+
+
+def _sse(event: str, data: dict) -> str:
+    """One Server-Sent Event. ``data`` is a single JSON line, so newlines in the text are safe."""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _source_out(number: int, source) -> SourceOut:
+    return SourceOut(number=number, label=citation_label(source), source=str(source.source), text=source.text, score=float(source.score))
+
+
+def _answer_response(request_id: str, answer) -> AskResponse:
+    return AskResponse(
+        request_id=request_id,
+        answer=answer.text,
+        refused=answer.refused,
+        citations=[CitationOut(number=c.number, label=c.label, source=c.source) for c in answer.citations],
+        sources=[_source_out(n, s) for n, s in enumerate(answer.sources, start=1)],
+        invalid_citations=answer.invalid_citations,
+        model=answer.model,
+        prompt_version=answer.prompt_version,
+        used_llm=answer.used_llm,
+        fallback_reason=answer.fallback_reason,
+        usage=answer.usage,
+        timings_ms=answer.timings,
+    )
+
+
+def _answer_log(answer) -> dict:
+    usage = answer.usage or {}
+    return dict(
+        model=answer.model, prompt_version=answer.prompt_version, used_llm=answer.used_llm, refused=answer.refused,
+        fallback_reason=answer.fallback_reason, sources=len(answer.sources), citations=len(answer.citations),
+        invalid_citations=len(answer.invalid_citations), tokens_in=usage.get("input_tokens", 0),
+        tokens_out=usage.get("output_tokens", 0), **answer.timings,
+    )
+
+
+def _question_log(body) -> dict:
+    return dict(
+        question_chars=len(body.question),
+        question_sha256=hashlib.sha256(body.question.encode("utf-8")).hexdigest()[:12],
+        top_k=body.top_k,
+    )
 
 
 def create_app(settings: Optional[Settings] = None, *, index=None, llm=None, metrics: Optional[Metrics] = None) -> FastAPI:
@@ -142,40 +187,59 @@ def create_app(settings: Optional[Settings] = None, *, index=None, llm=None, met
     @app.post("/ask", response_model=AskResponse, responses={422: {"model": ErrorResponse}, 503: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
     def ask(body: AskRequest, request: Request):
         request_id = request.state.request_id
-        request.state.log.update(
-            question_chars=len(body.question),
-            question_sha256=hashlib.sha256(body.question.encode("utf-8")).hexdigest()[:12],
-            top_k=body.top_k,
-        )
+        request.state.log.update(_question_log(body))
         if app.state.index is None:
             return _error(request_id, 503, "not_ready", app.state.not_ready)
 
         answer = RAGPipeline(app.state.index, complete=app.state.llm, top_k=body.top_k).answer(body.question)
         metrics.record_answer(answer)
-        usage = answer.usage or {}
-        request.state.log.update(
-            model=answer.model, prompt_version=answer.prompt_version, used_llm=answer.used_llm, refused=answer.refused,
-            fallback_reason=answer.fallback_reason, sources=len(answer.sources), citations=len(answer.citations),
-            invalid_citations=len(answer.invalid_citations), tokens_in=usage.get("input_tokens", 0),
-            tokens_out=usage.get("output_tokens", 0), **answer.timings,
-        )
-        return AskResponse(
-            request_id=request_id,
-            answer=answer.text,
-            refused=answer.refused,
-            citations=[CitationOut(number=c.number, label=c.label, source=c.source) for c in answer.citations],
-            sources=[
-                SourceOut(number=n, label=citation_label(s), source=str(s.source), text=s.text, score=float(s.score))
-                for n, s in enumerate(answer.sources, start=1)
-            ],
-            invalid_citations=answer.invalid_citations,
-            model=answer.model,
-            prompt_version=answer.prompt_version,
-            used_llm=answer.used_llm,
-            fallback_reason=answer.fallback_reason,
-            usage=answer.usage,
-            timings_ms=answer.timings,
-        )
+        request.state.log.update(_answer_log(answer))
+        return _answer_response(request_id, answer)
+
+    @app.post("/ask/stream", responses={200: {"content": {"text/event-stream": {}}}, 422: {"model": ErrorResponse}, 503: {"model": ErrorResponse}})
+    def ask_stream(body: AskRequest, request: Request):
+        """Server-Sent Events: ``sources`` once, ``delta`` per text piece, then ``final`` with the
+        checked answer (same body as ``/ask``), which replaces the streamed text. An unexpected
+        failure ends the stream with ``error``. If the client disconnects, generation stops."""
+        request_id = request.state.request_id
+        request.state.log.update(stream=True, **_question_log(body))
+        if app.state.index is None:
+            return _error(request_id, 503, "not_ready", app.state.not_ready)
+        pipeline = RAGPipeline(app.state.index, complete=app.state.llm, top_k=body.top_k)
+        question_fields = _question_log(body)
+
+        def events():
+            started = time.perf_counter()
+            answer, completed, error_type, deltas = None, False, None, 0
+            try:
+                for event in pipeline.stream(body.question):
+                    if event["type"] == "sources":
+                        sources = [_source_out(n, s).model_dump() for n, s in enumerate(event["sources"], start=1)]
+                        yield _sse("sources", {"request_id": request_id, "sources": sources})
+                    elif event["type"] == "delta":
+                        deltas += 1
+                        yield _sse("delta", {"text": event["text"]})
+                    else:
+                        answer = event["answer"]
+                        metrics.record_answer(answer)
+                        yield _sse("final", _answer_response(request_id, answer).model_dump())
+                        completed = True
+            except Exception as exc:  # the status line is already sent: report in-band, without internals
+                error_type = type(exc).__name__
+                yield _sse("error", {"request_id": request_id, "error": "internal_error"})
+            finally:
+                # Runs on completion, on error, and when the client disconnects (GeneratorExit).
+                fields = {"event": "stream", "request_id": request_id, "route": "/ask/stream", "completed": completed,
+                          "disconnected": not completed and error_type is None, "deltas": deltas,
+                          "stream_ms": round((time.perf_counter() - started) * 1000, 2), **question_fields}
+                if error_type:
+                    fields["error_type"] = error_type
+                if answer is not None:
+                    fields.update(_answer_log(answer))
+                _log(fields)
+
+        headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}  # no proxy buffering of the stream
+        return StreamingResponse(events(), media_type="text/event-stream", headers=headers)
 
     @app.get("/metrics", response_class=PlainTextResponse)
     def prometheus_metrics():

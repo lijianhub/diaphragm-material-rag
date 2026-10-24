@@ -4,7 +4,7 @@ from generation import Answer, ExtractiveAnswerer, RAGPipeline, build_prompt, ch
 from generation.prompt import PROMPT_LABEL, strip_refusal_citations
 from ingestion.loader import Document
 from retrieval.index import SearchIndex, SearchResult
-from tests.fakes import FakeLLM
+from tests.fakes import FakeLLM, FakeStreamingLLM
 
 
 def _result(text, source="notes.txt", score=1.0, **metadata):
@@ -223,3 +223,72 @@ def test_pipeline_removes_citations_from_a_refusal():
 def test_extractive_not_found_is_marked_as_refused():
     assert RAGPipeline(SearchIndex()).answer("anything?").refused
     assert not RAGPipeline(_index(), top_k=2).answer("Which lot was rejected for tearing?").refused
+
+
+# ---- streaming ----------------------------------------------------------------
+
+
+def _events(pipeline, question):
+    return list(pipeline.stream(question))
+
+
+def test_stream_sends_sources_then_deltas_then_a_checked_final():
+    llm = FakeStreamingLLM(pieces=("The price ", "is not in the sources. ", "[1][2]"))
+
+    events = _events(RAGPipeline(_index(), complete=llm, top_k=2), "What is the price of titanium?")
+    final = events[-1]["answer"]
+
+    assert [e["type"] for e in events] == ["sources", "delta", "delta", "delta", "final"]
+    assert len(events[0]["sources"]) == 2
+    # Deltas carry the raw text; the final answer is the checked version that replaces it.
+    assert "".join(e["text"] for e in events if e["type"] == "delta").endswith("[1][2]")
+    assert final.text == "The price is not in the sources." and final.refused and final.citations == []
+    assert {"retrieval_ms", "first_token_ms", "generation_ms"} <= set(final.timings)
+
+
+def test_streamed_and_non_streamed_answers_agree():
+    pieces = ("Dies are over-formed ", "by a small angle [1].")
+    pipeline_args = dict(top_k=2)
+
+    streamed = _events(RAGPipeline(_index(), complete=FakeStreamingLLM(pieces), **pipeline_args), "How is springback compensated?")[-1]["answer"]
+    whole = RAGPipeline(_index(), complete=FakeLLM("".join(pieces)), **pipeline_args).answer("How is springback compensated?")
+
+    assert streamed.text == whole.text
+    assert [c.number for c in streamed.citations] == [c.number for c in whole.citations] == [1]
+
+
+def test_stream_falls_back_to_extractive_when_the_llm_breaks_midway():
+    llm = FakeStreamingLLM(pieces=("Lot ", "L-302 ", "was rejected."), fail_after=1)
+
+    events = _events(RAGPipeline(_index(), complete=llm, top_k=2), "Which lot was rejected for tearing?")
+    final = events[-1]["answer"]
+
+    assert [e["type"] for e in events] == ["sources", "delta", "final"]
+    assert final.fallback_reason == "RuntimeError: stream broke" and not final.used_llm
+    assert "L-302" in final.text and final.citations  # the extractive answer replaces the partial text
+
+
+def test_closing_the_stream_stops_the_llm_stream():
+    llm = FakeStreamingLLM(pieces=("one ", "two ", "three"))
+    stream = RAGPipeline(_index(), complete=llm, top_k=2).stream("How is springback compensated?")
+
+    assert next(stream)["type"] == "sources"
+    assert next(stream)["type"] == "delta"
+    stream.close()  # what happens when the client disconnects
+
+    assert llm.closed_early and not llm.finished
+
+
+def test_stream_with_a_non_streaming_llm_sends_the_whole_answer_as_one_delta():
+    events = _events(RAGPipeline(_index(), complete=FakeLLM("Over-formed [1]."), top_k=2), "How is springback compensated?")
+
+    assert [e["type"] for e in events] == ["sources", "delta", "final"] and events[1]["text"] == "Over-formed [1]."
+
+
+def test_stream_with_nothing_retrieved_refuses_without_calling_the_llm():
+    llm = FakeStreamingLLM()
+
+    events = _events(RAGPipeline(SearchIndex(), complete=llm), "anything?")
+
+    assert events[0] == {"type": "sources", "sources": []}
+    assert events[-1]["answer"].refused and llm.prompts == []

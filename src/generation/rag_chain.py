@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, Iterator, List, Optional, Sequence
 
 from tokenization import tokenize
 
@@ -99,40 +99,22 @@ class RAGPipeline:
             return list(self.retrieve_fn(self.index, question, top_k=self.top_k))
         return self.index.search(question, top_k=self.top_k)
 
-    def answer(self, question: str, documents: Optional[Sequence[str]] = None) -> Answer:
-        started = time.perf_counter()
+    def _results(self, question: str, documents: Optional[Sequence[str]]) -> list:
         if documents is not None:
             # Plain passages (quick experiments, no index): treat them as ranked sources.
             from retrieval.index import SearchResult
 
-            results = [SearchResult(text=d, source=f"passage-{i}", start=0, end=len(d), score=0.0) for i, d in enumerate(documents, 1)]
-        else:
-            results = self._retrieve(question)
+            return [SearchResult(text=d, source=f"passage-{i}", start=0, end=len(d), score=0.0) for i, d in enumerate(documents, 1)]
+        return self._retrieve(question)
 
-        retrieved = time.perf_counter()
-        timings = {"retrieval_ms": round((retrieved - started) * 1000, 2)}
-        if not results:
-            return Answer(text=ExtractiveAnswerer.NOT_FOUND, model="none", refused=True, timings=timings)
+    def _llm_details(self):
+        call = getattr(self.complete, "last_call", None)
+        model = call.model if call else getattr(self.complete, "name", "llm")
+        usage = {"input_tokens": call.input_tokens, "output_tokens": call.output_tokens} if call else None
+        return model, usage
 
-        prompt = build_prompt(question, results, self.max_context_tokens)
-        offered = list(results[: prompt.included])
-        text, used_llm, reason, model, usage = None, False, None, "extractive", None
-        if self.complete is not None:
-            try:
-                chat = getattr(self.complete, "chat", None)
-                # Prefer a real system prompt; plain functions get one combined string.
-                text = (chat(prompt.system, prompt.user) if chat else self.complete(prompt.as_text())).strip()
-                used_llm = True
-                call = getattr(self.complete, "last_call", None)
-                model = call.model if call else getattr(self.complete, "name", "llm")
-                if call:
-                    usage = {"input_tokens": call.input_tokens, "output_tokens": call.output_tokens}
-            except Exception as exc:  # degrade to an extractive answer instead of failing
-                reason = f"{type(exc).__name__}: {exc}"
-        if text is None:
-            text = self.extractive.answer(question, offered)
-        timings["generation_ms"] = round((time.perf_counter() - retrieved) * 1000, 2)
-
+    def _finish(self, text, offered, prompt, used_llm, reason, model, usage, timings) -> Answer:
+        """The checks every answer goes through, streamed or not."""
         # A sentence saying the answer is not in the sources must not cite them.
         text, refused = strip_refusal_citations(text)
         valid, invalid = check_citations(text, len(offered))
@@ -154,3 +136,88 @@ class RAGPipeline:
             refused=refused,
             timings=timings,
         )
+
+    def answer(self, question: str, documents: Optional[Sequence[str]] = None) -> Answer:
+        started = time.perf_counter()
+        results = self._results(question, documents)
+        retrieved = time.perf_counter()
+        timings = {"retrieval_ms": round((retrieved - started) * 1000, 2)}
+        if not results:
+            return Answer(text=ExtractiveAnswerer.NOT_FOUND, model="none", refused=True, timings=timings)
+
+        prompt = build_prompt(question, results, self.max_context_tokens)
+        offered = list(results[: prompt.included])
+        text, used_llm, reason, model, usage = None, False, None, "extractive", None
+        if self.complete is not None:
+            try:
+                chat = getattr(self.complete, "chat", None)
+                # Prefer a real system prompt; plain functions get one combined string.
+                text = (chat(prompt.system, prompt.user) if chat else self.complete(prompt.as_text())).strip()
+                used_llm = True
+                model, usage = self._llm_details()
+            except Exception as exc:  # degrade to an extractive answer instead of failing
+                reason = f"{type(exc).__name__}: {exc}"
+        if text is None:
+            text = self.extractive.answer(question, offered)
+        timings["generation_ms"] = round((time.perf_counter() - retrieved) * 1000, 2)
+        return self._finish(text, offered, prompt, used_llm, reason, model, usage, timings)
+
+    def stream(self, question: str, documents: Optional[Sequence[str]] = None) -> Iterator[dict]:
+        """Answer as a sequence of events, for showing text while it is generated:
+
+        - ``{"type": "sources", "sources": [...]}`` as soon as retrieval is done;
+        - ``{"type": "delta", "text": ...}`` for each piece of generated text;
+        - ``{"type": "final", "answer": Answer}`` last, with the same checks as ``answer()``.
+
+        The final answer is authoritative: refusal citations are removed and citations
+        are validated on the complete text, so a client replaces the streamed text with it.
+        If the LLM fails, even after some text was streamed, the final answer is the
+        extractive fallback with ``fallback_reason``. Closing this generator early closes
+        the LLM stream, so an abandoned request stops generating.
+        """
+        started = time.perf_counter()
+        results = self._results(question, documents)
+        retrieved = time.perf_counter()
+        timings = {"retrieval_ms": round((retrieved - started) * 1000, 2)}
+        if not results:
+            yield {"type": "sources", "sources": []}
+            yield {"type": "final", "answer": Answer(text=ExtractiveAnswerer.NOT_FOUND, model="none", refused=True, timings=timings)}
+            return
+
+        prompt = build_prompt(question, results, self.max_context_tokens)
+        offered = list(results[: prompt.included])
+        yield {"type": "sources", "sources": offered}
+
+        parts, used_llm, reason, model, usage = [], False, None, "extractive", None
+        if self.complete is not None:
+            stream_chat = getattr(self.complete, "stream_chat", None)
+            try:
+                if stream_chat:
+                    pieces = stream_chat(prompt.system, prompt.user)
+                    try:
+                        for piece in pieces:
+                            if not parts:
+                                timings["first_token_ms"] = round((time.perf_counter() - started) * 1000, 2)
+                            parts.append(piece)
+                            yield {"type": "delta", "text": piece}
+                    finally:
+                        pieces.close()  # also on GeneratorExit: stop the upstream LLM stream
+                else:
+                    chat = getattr(self.complete, "chat", None)
+                    text = (chat(prompt.system, prompt.user) if chat else self.complete(prompt.as_text())).strip()
+                    timings["first_token_ms"] = round((time.perf_counter() - started) * 1000, 2)
+                    parts = [text]
+                    yield {"type": "delta", "text": text}
+                used_llm = True
+                model, usage = self._llm_details()
+            except Exception as exc:  # degrade to an extractive answer instead of failing
+                reason = f"{type(exc).__name__}: {exc}"
+                parts = []
+        if not used_llm:
+            text = self.extractive.answer(question, offered)
+            if "first_token_ms" not in timings:
+                timings["first_token_ms"] = round((time.perf_counter() - started) * 1000, 2)
+                yield {"type": "delta", "text": text}
+            parts = [text]
+        timings["generation_ms"] = round((time.perf_counter() - retrieved) * 1000, 2)
+        yield {"type": "final", "answer": self._finish("".join(parts).strip(), offered, prompt, used_llm, reason, model, usage, timings)}

@@ -10,7 +10,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Iterator, Optional, Union
 
 DEFAULT_MODEL = "claude-opus-5-5"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
@@ -96,6 +96,39 @@ class AnthropicLLM:
             raise LLMRefusal(f"model declined (category: {getattr(details, 'category', None)})")
         return "".join(block.text for block in response.content if block.type == "text").strip()
 
+    def stream_chat(self, system: Optional[str], user: str) -> Iterator[str]:
+        """Yield the answer's text as it is generated; ``last_call`` is set at the end.
+
+        Closing the generator early (the user went away) leaves the ``with`` block, which
+        closes the HTTP stream, so the model stops generating and billing stops too.
+        """
+        request = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "messages": [{"role": "user", "content": user}],
+            "output_config": {"effort": self.effort},
+        }
+        if system:
+            request["system"] = system
+        if self.fallbacks:
+            manager = self.client.beta.messages.stream(**request, betas=[FALLBACK_BETA], fallbacks="default")
+        else:
+            manager = self.client.messages.stream(**request)
+        with manager as stream:
+            for text in stream.text_stream:
+                yield text
+            response = stream.get_final_message()
+        usage = getattr(response, "usage", None)
+        self.last_call = LLMCall(
+            model=getattr(response, "model", self.model),
+            stop_reason=response.stop_reason,
+            input_tokens=getattr(usage, "input_tokens", 0),
+            output_tokens=getattr(usage, "output_tokens", 0),
+        )
+        if response.stop_reason == "refusal":
+            details = getattr(response, "stop_details", None)
+            raise LLMRefusal(f"model declined (category: {getattr(details, 'category', None)})")
+
     def __call__(self, prompt: str) -> str:
         return self.chat(None, prompt)
 
@@ -170,6 +203,50 @@ class OpenAILLM:
         if reason == "content_filter":
             raise LLMRefusal("model output stopped by content_filter")
         return "".join(texts).strip()
+
+    def stream_chat(self, system: Optional[str], user: str) -> Iterator[str]:
+        """Yield the answer's text deltas as they arrive (Responses API events);
+        ``last_call`` is set from the final ``response.completed`` event.
+
+        The stream is closed in ``finally``, also when the consumer stops early, so an
+        abandoned request stops generating instead of running (and billing) to the end.
+        """
+        request = {"model": self.model, "input": user, "max_output_tokens": self.max_output_tokens, "stream": True}
+        if system:
+            request["instructions"] = system
+        if self.reasoning_effort:
+            request["reasoning"] = {"effort": self.reasoning_effort}
+        stream = self.client.responses.create(**request)
+        final, refusal, produced = None, [], False
+        try:
+            for event in stream:
+                kind = getattr(event, "type", "")
+                if kind == "response.output_text.delta":
+                    produced = True
+                    yield event.delta
+                elif kind == "response.refusal.delta":
+                    refusal.append(event.delta)
+                elif kind in ("response.completed", "response.incomplete"):
+                    final = event.response
+                elif kind in ("response.failed", "error"):
+                    raise RuntimeError(f"OpenAI stream failed: {getattr(event, 'message', kind)}")
+        finally:
+            close = getattr(stream, "close", None)
+            if close:
+                close()
+        details = getattr(final, "incomplete_details", None) if final else None
+        reason = getattr(details, "reason", None)
+        usage = getattr(final, "usage", None)
+        self.last_call = LLMCall(
+            model=getattr(final, "model", self.model),
+            stop_reason=reason or getattr(final, "status", None) or "completed",
+            input_tokens=getattr(usage, "input_tokens", 0),
+            output_tokens=getattr(usage, "output_tokens", 0),
+        )
+        if refusal and not produced:
+            raise LLMRefusal(f"model declined: {''.join(refusal)[:200]}")
+        if reason == "content_filter":
+            raise LLMRefusal("model output stopped by content_filter")
 
     def __call__(self, prompt: str) -> str:
         return self.chat(None, prompt)
