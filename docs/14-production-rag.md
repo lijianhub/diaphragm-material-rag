@@ -31,6 +31,7 @@ curl -s localhost:8000/metrics
 | `GET /health` | **liveness**: the process is up | 200 |
 | `GET /ready` | **readiness**: the index is loaded; also reports chunks, embedder and answerer | 200, or 503 with a reason |
 | `GET /metrics` | Prometheus text format | 200 |
+| `GET /ops/summary`, `/ops/feedback`, `/ops/evaluations`, `/ops/ingestion` | read-only JSON for the ops dashboard (metrics with estimated percentiles, recent feedback, tracked runs, last ingestion report); internal, behind the BFF's admin key; see [18-ops-dashboard.md](18-ops-dashboard.md) | 200; 422 invalid `limit` |
 
 Request body: `question` (1–2,000 characters, not blank) and `top_k` (1–10, default 3), validated by Pydantic. Errors have one shape: `{"request_id", "error", "detail"}`.
 
@@ -70,7 +71,7 @@ One JSON object per request on stdout:
 
 - **Route templates, never raw paths:** `/ask`, and `unmatched` for 404s. A label taken from user input would create one time series per distinct URL (unbounded cardinality).
 - **Cost is tracked as tokens per model**, not dollars: prices change and differ by contract, while tokens are exact. Dollars are a dashboard calculation.
-- The registry is a small in-house implementation of the Prometheus text format (counters and histograms only), to avoid a dependency; Prometheus, Grafana or the planned ops dashboard can read it.
+- The registry is a small in-house implementation of the Prometheus text format (counters and histograms only), to avoid a dependency; Prometheus, Grafana or the ops dashboard can read it. Histogram buckets start at 1 ms: percentiles are estimated inside a bucket, and with 5 ms as the first bound every 2 ms request showed p95 = 4.8 ms.
 
 ## Measured on a laptop
 

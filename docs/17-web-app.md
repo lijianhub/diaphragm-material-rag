@@ -85,4 +85,4 @@ A local end-to-end check (API, BFF and Vite dev server, offline extractive answe
 
 - Conversation history and follow-up questions; each question is independent
 - Sign-in (the BFF's API key is a stub; real identity is a later step)
-- The ops dashboard (latency, errors, cost, feedback, evaluation trends), which is the next step
+- The ops dashboard is a separate page, `/ops`: see [18-ops-dashboard.md](18-ops-dashboard.md)

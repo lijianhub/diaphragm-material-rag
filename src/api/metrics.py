@@ -18,7 +18,9 @@ LabelKey = Tuple[Tuple[str, str], ...]
 TRAFFIC_ROUTES = ("/ask", "/ask/stream", "/feedback")
 
 # Seconds. Retrieval takes milliseconds and LLM calls take seconds, so buckets span both.
-DEFAULT_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
+# Percentiles are estimated inside a bucket, so they are only as fine as the buckets: with
+# 5 ms as the first bound, every 2 ms request showed p95 = 4.8 ms. 1 and 2.5 ms resolve it.
+DEFAULT_BUCKETS = (0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
 
 
 def _key(labels: Dict[str, str]) -> LabelKey:

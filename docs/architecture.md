@@ -82,16 +82,16 @@ question ─► [transforms] ─► first-stage retrieval per query (BM25 + dens
 ```
 Browser
  ├─ React user app        ask, read cited answers, open sources, give feedback (implemented: web/)
- └─ React ops dashboard   latency, errors, cost, evaluation trends, ingestion failures, approval queue (planned)
+ └─ React ops dashboard   latency, errors, cost, feedback, evaluation trends, ingestion failures (implemented: web/ /ops); approval queue (planned)
          │ HTTP + Server-Sent Events
  Node.js backend-for-frontend (implemented: bff/, TypeScript, Fastify)
          request IDs, rate limiting, API-key auth stub, CORS, SSE pass-through, cancellation
          │ HTTP JSON
  Python FastAPI service (implemented: src/api)
-         /ask /ask/stream /feedback /health /ready /metrics · request IDs · JSON logs · versioned answers
+         /ask /ask/stream /feedback /health /ready /metrics /ops/* · request IDs · JSON logs · versioned answers
 ```
 
-The user app ([17-web-app.md](17-web-app.md)) is implemented; the ops dashboard is planned. The backend-for-frontend ([16-backend-for-frontend.md](16-backend-for-frontend.md)) is a common pattern that keeps browser concerns (sessions, streaming, aggregation) out of the Python service. A minimal deployment could have React call FastAPI directly.
+The user app ([17-web-app.md](17-web-app.md)) and the ops dashboard ([18-ops-dashboard.md](18-ops-dashboard.md)) are implemented; the dashboard's approval queue arrives with the agent. The backend-for-frontend ([16-backend-for-frontend.md](16-backend-for-frontend.md)) is a common pattern that keeps browser concerns (sessions, streaming, aggregation) out of the Python service. A minimal deployment could have React call FastAPI directly.
 
 ## Deployment Target
 
