@@ -15,6 +15,8 @@ export interface Config {
   corsOrigins: string[];
   /** Time allowed until the upstream API answers (JSON) or starts the stream (headers). */
   upstreamTimeoutMs: number;
+  /** Time allowed for an agent run or an approval (several model turns and tools). */
+  agentTimeoutMs: number;
   logLevel: string;
 }
 
@@ -35,6 +37,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     rateLimitWindow: env.BFF_RATE_LIMIT_WINDOW ?? "1 minute",
     corsOrigins: env.BFF_CORS_ORIGINS === undefined ? ["http://localhost:5173"] : list(env.BFF_CORS_ORIGINS),
     upstreamTimeoutMs: Number(env.BFF_UPSTREAM_TIMEOUT_MS ?? 60_000),
+    agentTimeoutMs: Number(env.BFF_AGENT_TIMEOUT_MS ?? 180_000),
     logLevel: env.BFF_LOG_LEVEL ?? "info",
   };
 }

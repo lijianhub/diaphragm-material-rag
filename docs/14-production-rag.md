@@ -31,7 +31,9 @@ curl -s localhost:8000/metrics
 | `GET /health` | **liveness**: the process is up | 200 |
 | `GET /ready` | **readiness**: the index is loaded; also reports chunks, embedder and answerer | 200, or 503 with a reason |
 | `GET /metrics` | Prometheus text format | 200 |
-| `GET /ops/summary`, `/ops/feedback`, `/ops/evaluations`, `/ops/ingestion` | read-only JSON for the ops dashboard (metrics with estimated percentiles, recent feedback, tracked runs, last ingestion report); internal, behind the BFF's admin key; see [18-ops-dashboard.md](18-ops-dashboard.md) | 200; 422 invalid `limit` |
+| `POST /agent/runs`, `GET /agent/runs/{id}` | start an agent run (it completes, stops at a limit, or pauses for approval); read one with its trace, answer and citations (no transcript); see [13-agentic-rag.md](13-agentic-rag.md) | 200; 404; 422; 503 no index |
+| `GET /ops/approvals`, `POST /ops/approvals/{id}` | the approval queue; `{decision: approve\|reject, reviewer, reason}` resumes the run | 200; 404; 409 already decided; 422 |
+| `GET /ops/summary`, `/ops/feedback`, `/ops/evaluations`, `/ops/ingestion`, `/ops/agent-runs` | read-only JSON for the ops dashboard (metrics with estimated percentiles, recent feedback, tracked runs, last ingestion report); internal, behind the BFF's admin key; see [18-ops-dashboard.md](18-ops-dashboard.md) | 200; 422 invalid `limit` |
 
 Request body: `question` (1–2,000 characters, not blank) and `top_k` (1–10, default 3), validated by Pydantic. Errors have one shape: `{"request_id", "error", "detail"}`.
 
@@ -68,6 +70,9 @@ One JSON object per request on stdout:
 | `rag_llm_calls_total` | counter | model | call volume per model |
 | `rag_llm_tokens_total` | counter | model, direction (input, output) | **cost**: tokens × the model's price |
 | `rag_feedback_total` | counter | rating (up, down) | user satisfaction over time |
+| `rag_agent_runs_total` | counter | status | agent outcomes, including pauses for approval |
+| `rag_agent_tool_calls_total` | counter | tool, outcome | failing or misused tools (labels are registered tool names, never model text) |
+| `rag_agent_approvals_total` | counter | decision | how often reviewers reject what the agent proposes |
 
 - **Route templates, never raw paths:** `/ask`, and `unmatched` for 404s. A label taken from user input would create one time series per distinct URL (unbounded cardinality).
 - **Cost is tracked as tokens per model**, not dollars: prices change and differ by contract, while tokens are exact. Dollars are a dashboard calculation.

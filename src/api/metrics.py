@@ -128,6 +128,9 @@ class Metrics:
         self.llm_calls = Counter("rag_llm_calls_total", "LLM calls by model.")
         self.tokens = Counter("rag_llm_tokens_total", "LLM tokens by model and direction (input, output).")
         self.feedback = Counter("rag_feedback_total", "User feedback on answers by rating (up, down).")
+        self.agent_runs = Counter("rag_agent_runs_total", "Agent run transitions by status (completed, stopped, failed, awaiting_approval).")
+        self.agent_tools = Counter("rag_agent_tool_calls_total", "Agent tool calls by tool and outcome (ok, error, timeout, invalid_arguments, ...).")
+        self.agent_approvals = Counter("rag_agent_approvals_total", "Decisions on agent actions by decision (approve, reject).")
 
     def record_request(self, method: str, route: str, status: int, seconds: float) -> None:
         with self._lock:
@@ -145,6 +148,17 @@ class Metrics:
                 usage = answer.usage or {}
                 self.tokens.inc(usage.get("input_tokens", 0), model=answer.model, direction="input")
                 self.tokens.inc(usage.get("output_tokens", 0), model=answer.model, direction="output")
+
+    def record_agent_event(self, kind: str, data: dict) -> None:
+        """Hook for ``Agent(on_event=...)``. Tool names are the registered ones (or
+        "unknown"), never free text from the model, so the label set stays small."""
+        with self._lock:
+            if kind == "run":
+                self.agent_runs.inc(status=data["status"])
+            elif kind == "tool":
+                self.agent_tools.inc(tool=data["tool"], outcome=data["outcome"])
+            elif kind == "approval":
+                self.agent_approvals.inc(decision=data["decision"])
 
     def record_feedback(self, rating: str) -> None:
         with self._lock:
@@ -192,9 +206,16 @@ class Metrics:
                 "answers": {o: int(self.answers.get(outcome=o)) for o in ("answered", "refused", "fallback")},
                 "models": [{"model": m, **v} for m, v in sorted(models.items())],
                 "feedback": {r: int(self.feedback.get(rating=r)) for r in ("up", "down")},
+                "agent": {
+                    "runs": {dict(k)["status"]: int(v) for k, v in sorted(self.agent_runs.values.items())},
+                    "approvals": {d: int(self.agent_approvals.get(decision=d)) for d in ("approve", "reject")},
+                    "tool_calls": sorted(({**dict(k), "count": int(v)} for k, v in self.agent_tools.values.items()),
+                                         key=lambda r: (r["tool"], r["outcome"])),
+                },
             }
 
     def render(self) -> str:
         with self._lock:
-            parts = [self.requests, self.request_seconds, self.stage_seconds, self.answers, self.llm_calls, self.tokens, self.feedback]
+            parts = [self.requests, self.request_seconds, self.stage_seconds, self.answers, self.llm_calls, self.tokens, self.feedback,
+                     self.agent_runs, self.agent_tools, self.agent_approvals]
             return "\n".join(line for metric in parts for line in metric.render()) + "\n"

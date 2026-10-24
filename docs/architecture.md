@@ -67,7 +67,7 @@ question ─► [transforms] ─► first-stage retrieval per query (BM25 + dens
 | Query rewriting (multi-query, HyDE) | LLM, optional | Bridging vocabulary gaps; falls back to the original question |
 | Writing the answer | LLM; extractive fallback | Synthesis across sources |
 | Citation checking, budget, escaping | Deterministic code | Safety checks must not depend on the model |
-| Deciding to act (agent, planned) | LLM proposes, code enforces limits, a human approves side effects | Bounded autonomy |
+| Deciding to act (agent, [13-agentic-rag.md](13-agentic-rag.md)) | LLM proposes, code enforces limits, a human approves side effects | Bounded autonomy |
 
 ## Versioning and Traceability
 
@@ -82,16 +82,16 @@ question ─► [transforms] ─► first-stage retrieval per query (BM25 + dens
 ```
 Browser
  ├─ React user app        ask, read cited answers, open sources, give feedback (implemented: web/)
- └─ React ops dashboard   latency, errors, cost, feedback, evaluation trends, ingestion failures (implemented: web/ /ops); approval queue (planned)
+ └─ React ops dashboard   approvals, latency, errors, cost, feedback, evaluation trends, agent runs, ingestion failures (implemented: web/ /ops)
          │ HTTP + Server-Sent Events
  Node.js backend-for-frontend (implemented: bff/, TypeScript, Fastify)
          request IDs, rate limiting, API-key auth stub, CORS, SSE pass-through, cancellation
          │ HTTP JSON
  Python FastAPI service (implemented: src/api)
-         /ask /ask/stream /feedback /health /ready /metrics /ops/* · request IDs · JSON logs · versioned answers
+         /ask /ask/stream /feedback /agent/runs /health /ready /metrics /ops/* · request IDs · JSON logs · versioned answers
 ```
 
-The user app ([17-web-app.md](17-web-app.md)) and the ops dashboard ([18-ops-dashboard.md](18-ops-dashboard.md)) are implemented; the dashboard's approval queue arrives with the agent. The backend-for-frontend ([16-backend-for-frontend.md](16-backend-for-frontend.md)) is a common pattern that keeps browser concerns (sessions, streaming, aggregation) out of the Python service. A minimal deployment could have React call FastAPI directly.
+The user app ([17-web-app.md](17-web-app.md)) and the ops dashboard ([18-ops-dashboard.md](18-ops-dashboard.md)) are implemented; the dashboard also holds the agent's approval queue ([13-agentic-rag.md](13-agentic-rag.md)). The backend-for-frontend ([16-backend-for-frontend.md](16-backend-for-frontend.md)) is a common pattern that keeps browser concerns (sessions, streaming, aggregation) out of the Python service. A minimal deployment could have React call FastAPI directly.
 
 ## Deployment Target
 

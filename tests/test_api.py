@@ -475,3 +475,78 @@ def test_ops_ingestion_reports_the_last_indexing_run(tmp_path):
     assert report["loaded"] == 2 and report["seconds"] == 0.12 and report["sync"] == {"added": 2}
     assert report["failed"] == [{"source": "raw/scan.pdf", "reason": "no text layer"}]  # repository-relative
     assert report["duplicates"] == [{"source": "raw/copy.txt", "same_as": "raw/forming.txt"}]
+
+
+# ---- agent and approvals -----------------------------------------------------------------
+
+
+def _agent_client(tmp_path, llm=None, index="build"):
+    settings = Settings(index_dir="none", agent_db_path=str(tmp_path / "agent.db"), ncr_path=str(tmp_path / "ncr.jsonl"), alloy_table=str(tmp_path / "none.csv"))
+    app = create_app(settings, index=_index() if index == "build" else index, llm=llm)
+    return TestClient(app, raise_server_exceptions=False), app
+
+
+def _ncr_llm():
+    """An OpenAI backend over a fake client: asks for an NCR, then answers."""
+    from types import SimpleNamespace as ns
+
+    from generation.llm import OpenAILLM
+    from tests.fakes import FakeToolClient
+
+    args = json.dumps({"lot": "L-302", "defect": "tearing at the rim", "root_cause": "excess forming pressure", "corrective_action": "reduce pressure"})
+    ask = ns(output=[ns(type="function_call", call_id="call_1", name="raise_nonconformance_report", arguments=args)],
+             status="completed", incomplete_details=None, usage=ns(input_tokens=800, output_tokens=40), model="m-1")
+    done = ns(output=[ns(type="message", role="assistant", content=[ns(type="output_text", text="Report raised for lot L-302.")])],
+              status="completed", incomplete_details=None, usage=ns(input_tokens=900, output_tokens=10), model="m-1")
+    return OpenAILLM("m-1", client=FakeToolClient([ask, done]))
+
+
+def test_agent_run_offline_completes_and_hides_the_transcript(tmp_path, caplog):
+    client, _ = _agent_client(tmp_path)
+
+    with caplog.at_level(logging.INFO, logger="rag.api"):
+        run = client.post("/agent/runs", json={"question": "Why was lot L-302 rejected?"}).json()
+    again = client.get(f"/agent/runs/{run['id']}").json()
+    log = [json.loads(r.getMessage()) for r in caplog.records if r.name == "rag.api"][-1]
+
+    assert run["status"] == "completed" and run["planner"] == "rule-based" and "tearing" in run["answer"]
+    assert "transcript" not in run and again == run
+    assert log["run_status"] == "completed" and log["steps"] == 2 and "rejected" not in json.dumps(log)  # no question text
+    assert client.get("/agent/runs/" + "0" * 32).status_code == 404 and client.get("/agent/runs/../etc").status_code == 404
+    assert client.post("/agent/runs", json={"question": "  "}).status_code == 422
+
+
+def test_an_agent_action_waits_in_the_approval_queue_until_a_reviewer_approves(tmp_path):
+    client, app = _agent_client(tmp_path, llm=_ncr_llm())
+
+    paused = client.post("/agent/runs", json={"question": "Lot L-302 tore at the rim: raise an NCR."}).json()
+    written_before_approval = (tmp_path / "ncr.jsonl").exists()
+    queue = client.get("/ops/approvals").json()["pending"]
+    bad = client.post(f"/ops/approvals/{paused['id']}", json={"decision": "maybe", "reviewer": "admin-1"})
+    done = client.post(f"/ops/approvals/{paused['id']}", json={"decision": "approve", "reviewer": "admin-1"})
+    twice = client.post(f"/ops/approvals/{paused['id']}", json={"decision": "approve", "reviewer": "admin-1"})
+    metrics = client.get("/metrics").text
+    summary = client.get("/ops/summary").json()["agent"]
+
+    assert paused["status"] == "awaiting_approval" and paused["pending"]["arguments"]["lot"] == "L-302"
+    assert [r["id"] for r in queue] == [paused["id"]]
+    assert written_before_approval is False  # nothing is filed before a person decides
+    assert bad.status_code == 422
+    assert done.status_code == 200 and done.json()["status"] == "completed" and done.json()["approvals"][0]["reviewer"] == "admin-1"
+    assert len((tmp_path / "ncr.jsonl").read_text().splitlines()) == 1
+    assert twice.status_code == 409 and twice.json()["error"] == "not_awaiting_approval"
+    assert client.get("/ops/approvals").json()["pending"] == []
+    assert 'rag_agent_approvals_total{decision="approve"} 1' in metrics
+    assert 'rag_agent_tool_calls_total{outcome="pending_approval",tool="raise_nonconformance_report"} 1' in metrics
+    assert summary["runs"] == {"awaiting_approval": 1, "completed": 1} and summary["approvals"] == {"approve": 1, "reject": 0}
+    runs = client.get("/ops/agent-runs").json()["runs"]
+    assert runs[0]["id"] == paused["id"] and "trace" not in runs[0]
+    assert client.post("/ops/approvals/" + "f" * 32, json={"decision": "approve", "reviewer": "a"}).status_code == 404
+
+
+def test_agent_endpoints_need_an_index_and_never_create_files_otherwise(tmp_path):
+    client, _ = _agent_client(tmp_path, index=None)
+
+    assert client.post("/agent/runs", json={"question": "q"}).status_code == 503
+    assert client.get("/ops/approvals").json() == {"pending": []}
+    assert list(tmp_path.iterdir()) == []

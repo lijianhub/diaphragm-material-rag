@@ -7,6 +7,9 @@ Endpoints:
 - ``GET /health``   liveness: the process is up
 - ``GET /ready``    readiness: the index is loaded (503 otherwise)
 - ``GET /metrics``  Prometheus text format: requests, latency, stage timings, outcomes, LLM calls, tokens
+- ``POST /agent/runs`` start an agent run (tools, limits); it completes, stops, or pauses for approval
+- ``GET /agent/runs/{id}`` a run with its trace, answer and citations
+- ``GET /ops/approvals``, ``POST /ops/approvals/{id}`` the approval queue for actions with side effects
 - ``GET /ops/...``  read-only JSON for the ops dashboard: ``summary`` (the metrics with latency
   percentiles), ``feedback``, ``evaluations`` (tracked runs) and ``ingestion`` (last indexing run).
   Internal: the BFF puts them behind an admin key.
@@ -42,9 +45,11 @@ from generation.prompt import citation_label
 from .metrics import Metrics
 from .ops import read_feedback, read_runs
 from .schemas import (
+    AgentRunRequest,
     AskRequest,
     AskResponse,
     CitationOut,
+    DecisionRequest,
     ErrorResponse,
     FeedbackRequest,
     FeedbackResponse,
@@ -67,6 +72,9 @@ class Settings:
     llm_max_retries: int = 1
     feedback_path: str = "logs/feedback.jsonl"  # git-ignored; one JSON object per rating
     runs_path: str = "runs/runs.jsonl"  # tracked evaluation runs (--track jsonl), for the ops dashboard
+    agent_db_path: str = "logs/agent.db"  # agent runs (SQLite), so a paused run survives a restart
+    ncr_path: str = "logs/ncr.jsonl"  # nonconformance reports raised by approved agent actions
+    alloy_table: str = "data/raw/alloy_overview.csv"
 
     @classmethod
     def from_env(cls, base_dir: Optional[Path] = None) -> "Settings":
@@ -78,6 +86,9 @@ class Settings:
             llm_max_retries=int(os.environ.get("RAG_LLM_MAX_RETRIES", "1")),
             feedback_path=os.environ.get("RAG_FEEDBACK_PATH") or str(base / "logs" / "feedback.jsonl"),
             runs_path=os.environ.get("RAG_RUNS_PATH") or str(base / "runs" / "runs.jsonl"),
+            agent_db_path=os.environ.get("RAG_AGENT_DB") or str(base / "logs" / "agent.db"),
+            ncr_path=os.environ.get("RAG_NCR_PATH") or str(base / "logs" / "ncr.jsonl"),
+            alloy_table=os.environ.get("RAG_ALLOY_TABLE") or str(base / "data" / "raw" / "alloy_overview.csv"),
         )
 
 
@@ -177,6 +188,28 @@ def _question_log(body) -> dict:
         question_sha256=hashlib.sha256(body.question.encode("utf-8")).hexdigest()[:12],
         top_k=body.top_k,
     )
+
+
+_RUN_ID = re.compile(r"^[0-9a-f]{32}$")
+_PUBLIC_RUN_FIELDS = ("id", "question", "status", "stop_reason", "error_type", "created", "updated", "planner", "prompt_version",
+                      "limits", "steps", "tool_calls", "usage", "active_ms", "trace", "sources", "pending", "approvals", "answer",
+                      "citations", "invalid_citations", "refused")
+
+
+def _run_out(run: dict) -> dict:
+    """A run without its transcript: provider items (reasoning, thinking) stay server-side."""
+    return {k: run.get(k) for k in _PUBLIC_RUN_FIELDS}
+
+
+def _run_summary(run: dict) -> dict:
+    return {k: run.get(k) for k in ("id", "question", "status", "stop_reason", "created", "updated", "planner", "steps",
+                                    "tool_calls", "usage", "pending", "approvals")}
+
+
+def _run_log(run: dict) -> dict:
+    return {"run_id": run["id"], "run_status": run["status"], "stop_reason": run["stop_reason"], "steps": run["steps"],
+            "tool_calls": run["tool_calls"], "planner": run["planner"], "tokens_in": run["usage"]["input_tokens"],
+            "tokens_out": run["usage"]["output_tokens"], "active_ms": run["active_ms"]}
 
 
 def create_app(settings: Optional[Settings] = None, *, index=None, llm=None, metrics: Optional[Metrics] = None) -> FastAPI:
@@ -325,6 +358,86 @@ def create_app(settings: Optional[Settings] = None, *, index=None, llm=None, met
         metrics.record_feedback(body.rating)
         request.state.log.update(answer_request_id=body.request_id, rating=body.rating, has_comment=bool(body.comment))
         return FeedbackResponse(status="recorded", request_id=request_id)
+
+    # ---- agent ---------------------------------------------------------------------
+
+    # Built on first use, so an app that never runs the agent creates no database file.
+    agent_lock = threading.Lock()
+    app.state.agent = None
+
+    def get_agent():
+        with agent_lock:
+            if app.state.agent is None and app.state.index is not None:
+                from agent import Agent, LLMPlanner, NcrStore, RulePlanner, RunStore, default_tools
+
+                planner = LLMPlanner(llm) if llm is not None and hasattr(llm, "tool_turn") else RulePlanner()
+                app.state.agent = Agent(planner, default_tools(app.state.index, settings.alloy_table, NcrStore(settings.ncr_path)),
+                                        RunStore(settings.agent_db_path), on_event=metrics.record_agent_event)
+            return app.state.agent
+
+    def _agent_or_error(request_id: str):
+        runner = get_agent()
+        if runner is None:
+            return None, _error(request_id, 503, "not_ready", app.state.not_ready)
+        return runner, None
+
+    @app.post("/agent/runs", responses={422: {"model": ErrorResponse}, 503: {"model": ErrorResponse}})
+    def agent_run(body: AgentRunRequest, request: Request):
+        """Run the agent until it answers, hits a limit, or needs approval for an action."""
+        request_id = request.state.request_id
+        runner, failure = _agent_or_error(request_id)
+        if failure:
+            return failure
+        request.state.log.update(question_chars=len(body.question),
+                                 question_sha256=hashlib.sha256(body.question.encode("utf-8")).hexdigest()[:12])
+        run = runner.start(body.question)
+        request.state.log.update(_run_log(run))
+        return _run_out(run)
+
+    @app.get("/agent/runs/{run_id}", responses={404: {"model": ErrorResponse}})
+    def agent_run_get(run_id: str, request: Request):
+        request_id = request.state.request_id
+        runner, failure = _agent_or_error(request_id)
+        if failure:
+            return failure
+        run = runner.store.get(run_id) if _RUN_ID.match(run_id) else None
+        if run is None:
+            return _error(request_id, 404, "not_found")
+        return _run_out(run)
+
+    @app.get("/ops/approvals")
+    def ops_approvals():
+        runner = get_agent()
+        if runner is None:
+            return {"pending": []}
+        return {"pending": [_run_out(r) for r in runner.store.list(limit=100, status="awaiting_approval")]}
+
+    @app.post("/ops/approvals/{run_id}", responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}})
+    def ops_decide(run_id: str, body: DecisionRequest, request: Request):
+        """Approve or reject the pending action of a run, then let the run continue."""
+        from agent import NotAwaitingApproval, RunNotFound
+
+        request_id = request.state.request_id
+        runner, failure = _agent_or_error(request_id)
+        if failure:
+            return failure
+        if not _RUN_ID.match(run_id):
+            return _error(request_id, 404, "not_found")
+        try:
+            run = runner.decide(run_id, body.decision, body.reviewer, body.reason)
+        except RunNotFound:
+            return _error(request_id, 404, "not_found")
+        except NotAwaitingApproval:
+            return _error(request_id, 409, "not_awaiting_approval", "the run is not waiting for a decision (already decided?)")
+        request.state.log.update(decision=body.decision, reviewer=body.reviewer, **_run_log(run))
+        return _run_out(run)
+
+    @app.get("/ops/agent-runs")
+    def ops_agent_runs(limit: int = Query(50, ge=1, le=200)):
+        runner = get_agent()
+        if runner is None:
+            return {"runs": []}
+        return {"runs": [_run_summary(r) for r in runner.store.list(limit=limit)]}
 
     @app.get("/metrics", response_class=PlainTextResponse)
     def prometheus_metrics():

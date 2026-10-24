@@ -258,3 +258,51 @@ class FakeMlflow:
 
     def log_artifact(self, path):
         self.runs[-1]["artifacts"].append(path)
+
+
+class FakePlanner:
+    """A scripted agent planner: returns the given turns in order (a ToolTurn, or a
+    function of the run that builds one) and records the transcript it saw each time."""
+
+    name = "fake-planner"
+    provider = "fake"
+
+    def __init__(self, turns, tokens=(100, 20)):
+        self.turns = list(turns)
+        self.tokens = tokens
+        self.seen = []
+
+    def next_turn(self, system, transcript, tools, run):
+        import copy
+
+        from generation.llm import ToolTurn
+
+        self.seen.append(copy.deepcopy(transcript))
+        if not self.turns:
+            raise AssertionError("FakePlanner ran out of turns")
+        turn = self.turns.pop(0)
+        if isinstance(turn, Exception):
+            raise turn
+        turn = turn(run) if callable(turn) else turn
+        return ToolTurn(turn.text, turn.calls, turn.items, self.name, turn.stop_reason, *self.tokens)
+
+
+class FakeToolClient:
+    """Stands in for openai.OpenAI() or anthropic.Anthropic() in tool-calling turns:
+    returns the scripted responses in order and records a copy of each request."""
+
+    def __init__(self, scripted):
+        from types import SimpleNamespace as ns
+
+        self.scripted = list(scripted)
+        self.calls = []
+        create = lambda **kw: self._next(kw)  # noqa: E731
+        self.responses = ns(create=create)  # OpenAI
+        self.messages = ns(create=create)  # Anthropic
+        self.beta = ns(messages=ns(create=create))
+
+    def _next(self, kwargs):
+        import copy
+
+        self.calls.append(copy.deepcopy(kwargs))
+        return self.scripted.pop(0)

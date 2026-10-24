@@ -4,10 +4,12 @@
 
 | Question | Panel | Source |
 |---|---|---|
+| What is the agent waiting for me to approve? | Approvals: the proposed action and its arguments, the question, the agent's steps and evidence; Approve, or Reject with a reason | `GET /ops/approvals`, `POST /ops/approvals/{id}` ([13-agentic-rag.md](13-agentic-rag.md)) |
 | Is it up, fast and error-free? | Service: status, requests, server-error rate, `/ask` p50/p95, refusal and fallback rates, requests per minute, stage latencies | `GET /ops/summary` (the metrics registry) |
 | What does it cost? | LLM usage: calls, input and output tokens per model, tokens per call | `GET /ops/summary` |
 | Do users find the answers helpful? | Feedback: share of 👍, recent ratings with comments and the answer's request ID | `GET /ops/feedback` (`logs/feedback.jsonl`) |
 | Did a change make the system better or worse? | Evaluation runs: trend of a chosen metric, runs table with commit, dirty flag and data version | `GET /ops/evaluations` (`runs/runs.jsonl`) |
+| What did the agent do? | Agent runs: status, stop reason, steps, tool calls, tokens, who decided | `GET /ops/agent-runs` |
 | Did the last indexing run fail on any files? | Ingestion: loaded, failed (with reason), duplicates, skipped | `GET /ops/ingestion` (`data/index/ingest_report.json`) |
 
 ```
@@ -91,5 +93,4 @@ A local end-to-end run (API, BFF with user and admin keys, Vite) returned the 40
 
 - **History and alerts** (Prometheus and Grafana, at deployment)
 - **Aggregation across replicas:** each API process has its own counters
-- **The approval queue**, which arrives with the agent (step 20): actions with side effects wait there for a person
 - **MLflow runs:** the page reads the JSONL run log; use `mlflow ui` for MLflow runs

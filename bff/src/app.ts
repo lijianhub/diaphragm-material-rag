@@ -40,6 +40,36 @@ const feedbackSchema = {
   },
 } as const;
 
+const agentRunSchema = {
+  type: "object",
+  required: ["question"],
+  additionalProperties: false,
+  properties: { question: { type: "string", minLength: 1, maxLength: 2000, pattern: "\\S" } },
+} as const;
+
+// No `reviewer` here: the BFF sets it from the admin key, so a browser cannot claim to be
+// someone else (an extra field is stripped, like any unknown field).
+const decisionSchema = {
+  type: "object",
+  required: ["decision"],
+  additionalProperties: false,
+  properties: {
+    decision: { type: "string", enum: ["approve", "reject"] },
+    reason: { type: "string", maxLength: 500 },
+  },
+} as const;
+
+const runIdParams = {
+  type: "object",
+  required: ["id"],
+  properties: { id: { type: "string", pattern: "^[0-9a-f]{32}$" } },
+} as const;
+
+interface DecisionBody {
+  decision: "approve" | "reject";
+  reason?: string;
+}
+
 interface FeedbackBody {
   request_id: string;
   rating: "up" | "down";
@@ -117,11 +147,20 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
   };
 
   // Ops routes: an admin key is required whenever any authentication is configured. With no
-  // keys at all (local development) they are open, like everything else.
+  // keys at all (local development) they are open, like everything else. The matched key
+  // names the reviewer ("admin-1" for the first key) until real identity arrives.
+  const reviewers = new WeakMap<FastifyRequest, string>();
   const authenticateAdmin = async (request: FastifyRequest, reply: FastifyReply) => {
-    if (config.apiKeys.length === 0 && config.adminKeys.length === 0) return;
+    if (config.apiKeys.length === 0 && config.adminKeys.length === 0) {
+      reviewers.set(request, "local-dev");
+      return;
+    }
     const token = bearer(request);
-    if (token && config.adminKeys.some((key) => sameSecret(token, key))) return;
+    const index = token ? config.adminKeys.findIndex((key) => sameSecret(token, key)) : -1;
+    if (index >= 0) {
+      reviewers.set(request, `admin-${index + 1}`);
+      return;
+    }
     if (token && config.apiKeys.some((key) => sameSecret(token, key))) {
       return reply.code(403).send(errorBody(request, "forbidden")); // a valid user, but not an admin
     }
@@ -155,14 +194,20 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
   });
 
   /** Forward the request to the API and pass its status and body back (its errors carry the same request ID). */
-  const proxyJson = async (request: FastifyRequest, reply: FastifyReply, path: string, method: "GET" | "POST" = "POST") => {
+  const proxyJson = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    path: string,
+    method: "GET" | "POST" = "POST",
+    options: { body?: unknown; timeoutMs?: number } = {},
+  ) => {
     let upstream: Response;
     try {
       upstream = await fetch(`${config.upstreamUrl}${path}`, {
         method,
         headers: upstreamHeaders(request),
-        ...(method === "POST" ? { body: JSON.stringify(request.body) } : {}),
-        signal: AbortSignal.timeout(config.upstreamTimeoutMs),
+        ...(method === "POST" ? { body: JSON.stringify(options.body ?? request.body) } : {}),
+        signal: AbortSignal.timeout(options.timeoutMs ?? config.upstreamTimeoutMs),
       });
     } catch (error) {
       const timedOut = (error as Error).name === "TimeoutError";
@@ -185,7 +230,7 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
   );
 
   // Read-only views for the ops dashboard. Only `limit` is forwarded, and only when valid.
-  for (const view of ["summary", "feedback", "evaluations", "ingestion"]) {
+  for (const view of ["summary", "feedback", "evaluations", "ingestion", "approvals", "agent-runs"]) {
     app.get<{ Querystring: { limit?: number } }>(
       `/api/ops/${view}`,
       {
@@ -196,6 +241,29 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
       (request, reply) => proxyJson(request, reply, `/ops/${view}${request.query.limit ? `?limit=${request.query.limit}` : ""}`, "GET"),
     );
   }
+
+  // The agent: users start runs and read them; reviewers decide on pending actions.
+  app.post(
+    "/api/agent/runs",
+    { schema: { body: agentRunSchema }, preHandler: authenticate, config: askRoute.config },
+    (request, reply) => proxyJson(request, reply, "/agent/runs", "POST", { timeoutMs: config.agentTimeoutMs }),
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/api/agent/runs/:id",
+    { schema: { params: runIdParams }, preHandler: authenticate, config: askRoute.config },
+    (request, reply) => proxyJson(request, reply, `/agent/runs/${request.params.id}`, "GET"),
+  );
+
+  app.post<{ Params: { id: string }; Body: DecisionBody }>(
+    "/api/ops/approvals/:id",
+    { schema: { params: runIdParams, body: decisionSchema }, preHandler: authenticateAdmin, config: askRoute.config },
+    (request, reply) =>
+      proxyJson(request, reply, `/ops/approvals/${request.params.id}`, "POST", {
+        body: { ...request.body, reviewer: reviewers.get(request) },
+        timeoutMs: config.agentTimeoutMs, // approving resumes the run: more model turns
+      }),
+  );
 
   app.post<{ Body: AskBody }>("/api/ask/stream", askRoute, async (request, reply) => {
     const controller = new AbortController();

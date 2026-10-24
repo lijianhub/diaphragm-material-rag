@@ -23,6 +23,7 @@ npm run typecheck && npm run build && npm start  # production build in bff/dist
 | `RAG_API_URL` | `http://127.0.0.1:8000` | the Python API |
 | `BFF_HOST`, `BFF_PORT` | `127.0.0.1`, `3000` | where the BFF listens |
 | `BFF_API_KEYS` | empty | comma-separated Bearer keys; **empty turns authentication off** (local development only; a warning is logged) |
+| `BFF_AGENT_TIMEOUT_MS` | `180000` | for agent runs and approvals, which take several model turns |
 | `BFF_ADMIN_KEYS` | empty | Bearer keys for `/api/ops/*`; a user key gets 403. With user keys but no admin keys, the ops routes are closed |
 | `BFF_RATE_LIMIT_MAX`, `BFF_RATE_LIMIT_WINDOW` | `30`, `1 minute` | per client, on the `/api/ask` routes |
 | `BFF_CORS_ORIGINS` | `http://localhost:5173` | allowed browser origins (the React dev server) |
@@ -35,7 +36,9 @@ npm run typecheck && npm run build && npm start  # production build in bff/dist
 | `POST /api/ask` | validates, authenticates, rate-limits, forwards to `/ask`, passes status and body through | 400 invalid, 401, 429 (with `Retry-After`), 502 API unreachable, 504 API timeout, API errors passed through |
 | `POST /api/ask/stream` | the same, then pipes the API's Server-Sent Events to the browser without buffering | as above before the stream starts; an `error` event if the upstream stream breaks |
 | `POST /api/feedback` | validates (`request_id` pattern, `rating` `up`/`down`, `comment` up to 500 characters), authenticates, rate-limits, forwards to `/feedback` | as for `/api/ask` |
-| `GET /api/ops/summary`, `feedback`, `evaluations`, `ingestion` | admin key, rate limit, valid `limit` only; forwards to `/ops/*` as GET | 401, 403 (user key), 400, 502, 504 |
+| `POST /api/agent/runs`, `GET /api/agent/runs/:id` | user key, rate limit; question 1–2,000 characters; run ID must be 32 hex characters | 400, 401, 429, 502, 504 |
+| `POST /api/ops/approvals/:id` | admin key; `decision` and `reason` only: **the BFF sets `reviewer` from the matched admin key** (`admin-1`, …; `local-dev` without keys), and a `reviewer` in the body is stripped | 400, 401, 403, 409 passed through |
+| `GET /api/ops/summary`, `feedback`, `evaluations`, `ingestion`, `approvals`, `agent-runs` | admin key, rate limit, valid `limit` only; forwards to `/ops/*` as GET | 401, 403 (user key), 400, 502, 504 |
 | `GET /api/health` | liveness of the BFF itself (no upstream call, no authentication) | — |
 | `GET /api/ready` | the API's readiness, passed through | 503 when the API is down or not ready |
 

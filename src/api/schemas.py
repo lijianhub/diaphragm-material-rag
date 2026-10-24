@@ -73,6 +73,23 @@ class FeedbackRequest(BaseModel):
     comment: Optional[str] = Field(None, max_length=500)
 
 
+class AgentRunRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=MAX_QUESTION_CHARS, description="The task or question for the agent")
+
+    @field_validator("question")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("question must not be blank")
+        return value
+
+
+class DecisionRequest(BaseModel):
+    decision: Literal["approve", "reject"]
+    reviewer: str = Field(..., pattern=r"^[A-Za-z0-9._:@-]{1,64}$", description="Who decided (set by the BFF from the admin key)")
+    reason: str = Field("", max_length=500)
+
+
 class FeedbackResponse(BaseModel):
     status: str
     request_id: str

@@ -1,4 +1,5 @@
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -6,7 +7,7 @@ from generation import RAGPipeline, build_prompt
 from generation.llm import DEFAULT_MODEL, AnthropicLLM, CachedLLM, LLMRefusal, OpenAILLM, create_llm
 from ingestion.loader import Document
 from retrieval.index import SearchIndex
-from tests.fakes import FakeAnthropicClient, FakeOpenAIClient
+from tests.fakes import FakeAnthropicClient, FakeOpenAIClient, FakeToolClient
 
 DOCS = [
     Document(source="forming.txt", content="Springback is compensated by over-forming the profile by a small angle."),
@@ -314,3 +315,82 @@ def test_anthropic_stream_yields_text_and_keeps_the_refusal_fallback():
 def test_anthropic_stream_refusal_raises_after_the_stream():
     with pytest.raises(LLMRefusal):
         list(AnthropicLLM(client=FakeAnthropicClient(stop_reason="refusal", refusal_category="cyber")).stream_chat(None, "q"))
+
+
+# ---- native tool calling (the agent's planner) -----------------------------------------
+
+TOOLS = [{"name": "search_documents", "description": "Search.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}}]
+
+
+def _ns(**kw):
+    return SimpleNamespace(**kw)
+
+
+def test_openai_tool_turn_sends_functions_replays_items_and_parses_calls():
+
+    first = _ns(output=[_ns(type="reasoning", id="rs_1", summary=[]),
+                        _ns(type="function_call", call_id="call_1", name="search_documents", arguments='{"query": "burrs"}'),
+                        _ns(type="function_call", call_id="call_2", name="search_documents", arguments="{oops")],
+                status="completed", incomplete_details=None, usage=_ns(input_tokens=500, output_tokens=30), model="m-1")
+    second = _ns(output=[_ns(type="message", role="assistant", content=[_ns(type="output_text", text="Worn dies [1].")])],
+                 status="completed", incomplete_details=None, usage=_ns(input_tokens=700, output_tokens=12), model="m-1")
+    client = FakeToolClient([first, second])
+    llm = OpenAILLM("m-1", reasoning_effort="low", client=client)
+    transcript = [{"role": "user", "content": "<question>burrs?</question>"}]
+
+    turn = llm.tool_turn("rules", transcript, TOOLS)
+    transcript += [{"role": "assistant", "provider": "openai", "items": turn.items, "text": turn.text, "calls": []},
+                   {"role": "tool", "call_id": "call_1", "name": "search_documents", "content": "<result id=\"1\">x</result>", "is_error": False}]
+    final = llm.tool_turn("rules", transcript, TOOLS)
+
+    request = client.calls[0]
+    assert request["tools"] == [{"type": "function", "name": "search_documents", "description": "Search.", "parameters": TOOLS[0]["parameters"], "strict": False}]
+    assert request["instructions"] == "rules" and request["reasoning"] == {"effort": "low"}
+    assert [(c.id, c.arguments) for c in turn.calls] == [("call_1", {"query": "burrs"}), ("call_2", None)]
+    assert turn.calls[1].raw_arguments == "{oops" and turn.input_tokens == 500
+    replay = client.calls[1]["input"]
+    assert replay[1] == {"type": "reasoning", "id": "rs_1", "summary": []}  # reasoning items go back unchanged
+    assert replay[-1] == {"type": "function_call_output", "call_id": "call_1", "output": "<result id=\"1\">x</result>"}
+    assert final.text == "Worn dies [1]." and final.calls == []
+
+
+def test_anthropic_tool_turn_groups_tool_results_into_one_user_message():
+
+    response = _ns(content=[_ns(type="thinking", thinking="", signature="sig"), _ns(type="text", text="Let me search."),
+                            _ns(type="tool_use", id="tu_1", name="search_documents", input={"query": "burrs"})],
+                   stop_reason="tool_use", model="claude-opus-5-5", usage=_ns(input_tokens=900, output_tokens=40))
+    client = FakeToolClient([response, response])
+    llm = AnthropicLLM(client=client, effort="low")
+    transcript = [{"role": "user", "content": "q"}]
+
+    turn = llm.tool_turn("rules", transcript, TOOLS)
+    transcript += [{"role": "assistant", "provider": "anthropic", "items": turn.items, "text": turn.text, "calls": []},
+                   {"role": "tool", "call_id": "tu_1", "name": "search_documents", "content": "r1", "is_error": False},
+                   {"role": "tool", "call_id": "tu_2", "name": "search_documents", "content": "bad", "is_error": True}]
+    llm.tool_turn("rules", transcript, TOOLS)
+
+    first, second = client.calls
+    assert first["tools"] == [{"name": "search_documents", "description": "Search.", "input_schema": TOOLS[0]["parameters"]}]
+    assert first["output_config"] == {"effort": "low"} and first["system"] == "rules"
+    assert turn.text == "Let me search." and [(c.id, c.arguments) for c in turn.calls] == [("tu_1", {"query": "burrs"})]
+    assert second["messages"][1] == {"role": "assistant", "content": turn.items}  # thinking block (with signature) sent back
+    assert turn.items[0]["signature"] == "sig"
+    assert second["messages"][2] == {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "tu_1", "content": "r1", "is_error": False},
+        {"type": "tool_result", "tool_use_id": "tu_2", "content": "bad", "is_error": True},
+    ]}
+
+
+def test_a_transcript_from_another_planner_is_translated_for_each_provider():
+
+    transcript = [{"role": "user", "content": "q"},
+                  {"role": "assistant", "provider": "rule-based", "items": [], "text": "", "calls": [{"id": "c1", "name": "search_documents", "arguments": {"query": "q"}}]},
+                  {"role": "tool", "call_id": "c1", "name": "search_documents", "content": "r", "is_error": False}]
+    openai_client = FakeToolClient([_ns(output=[], status="completed", incomplete_details=None, usage=None, model="m")])
+    anthropic_client = FakeToolClient([_ns(content=[_ns(type="text", text="a")], stop_reason="end_turn", model="c", usage=None)])
+
+    OpenAILLM("m", client=openai_client).tool_turn(None, transcript, TOOLS)
+    AnthropicLLM(client=anthropic_client).tool_turn(None, transcript, TOOLS)
+
+    assert openai_client.calls[0]["input"][1] == {"type": "function_call", "call_id": "c1", "name": "search_documents", "arguments": '{"query": "q"}'}
+    assert anthropic_client.calls[0]["messages"][1] == {"role": "assistant", "content": [{"type": "tool_use", "id": "c1", "name": "search_documents", "input": {"query": "q"}}]}

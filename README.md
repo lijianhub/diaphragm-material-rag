@@ -28,7 +28,7 @@ The goal is a small but complete AI service that is **evaluated, tested and expl
 | Node.js backend-for-frontend (TypeScript, Fastify): SSE pass-through, rate limiting, API-key auth stub, CORS, request IDs | ✅ Implemented and tested (Vitest) | Authentication is a stub; see [docs/16](docs/16-backend-for-frontend.md) |
 | React user app: streamed answers, citation links to sources, stop, 👍/👎 feedback stored with the answer's request ID | ✅ Implemented and tested (Vitest, React Testing Library) | Checked end to end with curl through the dev proxy, not yet in a real browser; see [docs/17](docs/17-web-app.md) |
 | React ops dashboard: service health, latency percentiles, tokens per model, feedback, evaluation trends (comparable runs only), ingestion failures; admin keys | ✅ Implemented and tested (pytest, Vitest) | Checked end to end through the dev proxy, not yet in a real browser; no history or alerts (Prometheus and Grafana at deployment); see [docs/18](docs/18-ops-dashboard.md) |
-| Agent workflow with tool limits and human approval | 🔜 Planned | |
+| Agent workflow: native tool calling (OpenAI, Anthropic), schema-validated tools, step/tool/token/time limits, persisted runs, human approval for side effects (approval queue on the dashboard) | ✅ Implemented, tested, measured with OpenAI | Anthropic tool use tested with fakes only; no agent benchmark yet (next step); see [docs/13](docs/13-agentic-rag.md) |
 | Docker, CI, AWS deployment, operations runbook | 🔜 Planned | |
 
 ## Architecture
@@ -75,6 +75,7 @@ pip install -e .[tracking]           # MLflow experiment tracking
 pip install -e .[api] && python scripts/serve.py      # HTTP API on :8000 (docs at /docs)
 cd bff && npm install && npm run dev && npm test      # Node.js BFF on :3000 (needs the API)
 cd web && npm install && npm run dev && npm test      # React app on :5173 (proxies /api to the BFF); ops dashboard on /ops
+python scripts/agent.py "Lot L-302 tore near a tight radius. Raise an NCR." --llm openai:<model>@low   # agent; then --approve <run-id>
 python scripts/evaluate.py --track mlflow && python scripts/compare_runs.py   # record runs, compare them
 
 python scripts/index.py --rebuild --embedder st:sentence-transformers/all-MiniLM-L6-v2 --store faiss
@@ -141,7 +142,8 @@ src/
   generation/    grounded prompt, citations, RAGPipeline, extractive answers
   evaluation/    retrieval metrics, generation scoring and gates, dataset, benchmark corpus
   tracking/      run records, version fingerprints; null, JSONL and MLflow trackers
-  api/           FastAPI app (JSON and streaming), schemas, Prometheus-format metrics
+  api/           FastAPI app (JSON and streaming), schemas, Prometheus-format metrics, ops and agent endpoints
+  agent/         agent loop (state machine), tools with schemas, run store, approval of side effects
 bff/             Node.js backend-for-frontend (TypeScript, Fastify, Vitest)
 web/             React user app and ops dashboard (TypeScript, Vite, Tailwind CSS, Vitest)
 scripts/         index.py, query.py, serve.py, evaluate.py, evaluate_generation.py, compare_runs.py, check_llm.py
@@ -151,7 +153,7 @@ docs/            one document per topic (fundamentals, ingestion, parsing, chunk
 tests/           unit tests, fakes for model SDKs, in-code builders for PDF/DOCX/XLSX
 ```
 
-Topic documents: [RAG fundamentals](docs/01-rag-fundamentals.md) · [ingestion](docs/02-document-ingestion.md) · [parsing](docs/03-document-parsing.md) · [chunking](docs/04-chunking.md) · [embeddings](docs/05-embeddings.md) · [vector database](docs/06-vector-database.md) · [reranking](docs/08-reranking.md) · [query transformation](docs/09-query-transformation.md) · [generation](docs/10-generation.md) · [evaluation](docs/11-rag-evaluation.md) · [HTTP service](docs/14-production-rag.md) · [backend-for-frontend and streaming](docs/16-backend-for-frontend.md) · [web app](docs/17-web-app.md) · [ops dashboard](docs/18-ops-dashboard.md) · [experiment tracking](docs/15-experiment-tracking.md) · [architecture](docs/architecture.md)
+Topic documents: [RAG fundamentals](docs/01-rag-fundamentals.md) · [agentic RAG](docs/13-agentic-rag.md) · [ingestion](docs/02-document-ingestion.md) · [parsing](docs/03-document-parsing.md) · [chunking](docs/04-chunking.md) · [embeddings](docs/05-embeddings.md) · [vector database](docs/06-vector-database.md) · [reranking](docs/08-reranking.md) · [query transformation](docs/09-query-transformation.md) · [generation](docs/10-generation.md) · [evaluation](docs/11-rag-evaluation.md) · [HTTP service](docs/14-production-rag.md) · [backend-for-frontend and streaming](docs/16-backend-for-frontend.md) · [web app](docs/17-web-app.md) · [ops dashboard](docs/18-ops-dashboard.md) · [experiment tracking](docs/15-experiment-tracking.md) · [architecture](docs/architecture.md)
 
 ## Known limitations
 
@@ -164,7 +166,7 @@ Topic documents: [RAG fundamentals](docs/01-rag-fundamentals.md) · [ingestion](
 
 ## Roadmap
 
-1. Agent workflow with tool schemas, timeouts, step limits and human approval for side-effecting actions
+1. Agent evaluation: fixed tasks with expected tool calls, refusals and approval behaviour
 2. Docker Compose, GitHub Actions CI (running the generation gates and logging runs), AWS deployment and an operations runbook
 
 ## Contributing

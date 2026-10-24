@@ -1,4 +1,4 @@
-import type { EvaluationsView, FeedbackView, IngestionView, Run, Summary } from "./api";
+import type { AgentRun, EvaluationsView, FeedbackView, IngestionView, Run, Summary } from "./api";
 
 export function summary(overrides: Partial<Summary> = {}): Summary {
   return {
@@ -77,4 +77,39 @@ export const ingestion: IngestionView = {
     seconds: 0.07,
   },
   reason: null,
+};
+
+export const pendingRun: AgentRun = {
+  id: "a".repeat(32),
+  question: "Lot L-302 failed inspection with edge burrs. Raise an NCR.",
+  status: "awaiting_approval",
+  stop_reason: null,
+  created: "2026-10-25T09:00:00+00:00",
+  updated: "2026-10-25T09:00:02+00:00",
+  planner: "openai:gpt-5.4-mini@low",
+  steps: 2,
+  tool_calls: 2,
+  usage: { input_tokens: 2400, output_tokens: 180 },
+  pending: {
+    call_id: "call_2",
+    tool: "raise_nonconformance_report",
+    arguments: { lot: "L-302", defect: "edge burrs", root_cause: "worn blanking die", corrective_action: "regrind the die" },
+    requested: "2026-10-25T09:00:02+00:00",
+  },
+  approvals: [],
+  trace: [
+    { step: 1, type: "tool", tool: "search_documents", arguments: { query: "edge burrs" }, status: "ok", summary: "<result id=\"1\">…", ms: 4 },
+    { step: 2, type: "tool", tool: "raise_nonconformance_report", arguments: {}, status: "pending_approval", summary: "waiting", ms: 0 },
+  ],
+  sources: [{ number: 1, label: "forming_defects_notes.txt", source: "data/raw/forming_defects_notes.txt", text: "Edge burrs…" }],
+  answer: null,
+};
+
+export const finishedRun: AgentRun = {
+  ...pendingRun,
+  id: "b".repeat(32),
+  question: "What causes galling?",
+  status: "completed",
+  pending: null,
+  approvals: [{ call_id: "c", tool: "raise_nonconformance_report", arguments: {}, decision: "reject", reviewer: "admin-1", reason: "wrong lot", ts: "2026-10-25T08:00:00+00:00" }],
 };

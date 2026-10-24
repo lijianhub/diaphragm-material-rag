@@ -31,8 +31,8 @@ class FakeUpstream {
           }
         } else if (req.url === "/feedback") {
           res.writeHead(201, { "content-type": "application/json" }).end(JSON.stringify({ status: "recorded", request_id: id }));
-        } else if (req.url?.startsWith("/ops/")) {
-          res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ path: req.url, method: req.method }));
+        } else if (req.url?.startsWith("/ops/") || req.url?.startsWith("/agent/")) {
+          res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ path: req.url, method: req.method, body: body ? JSON.parse(body) : null }));
         } else if (req.url === "/ask/stream") {
           res.writeHead(200, { "content-type": "text/event-stream" });
           res.on("close", () => {
@@ -284,11 +284,11 @@ describe("GET /api/ready", () => {
 });
 
 describe("GET /api/ops/*", () => {
-  it.each(["summary", "feedback", "evaluations", "ingestion"])("forwards %s to the API as a GET", async (view) => {
+  it.each(["summary", "feedback", "evaluations", "ingestion", "approvals", "agent-runs"])("forwards %s to the API as a GET", async (view) => {
     const response = await app.inject({ url: `/api/ops/${view}`, headers: { "x-request-id": "ops-1" } });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ path: `/ops/${view}`, method: "GET" });
+    expect(response.json()).toEqual({ path: `/ops/${view}`, method: "GET", body: null });
     expect(upstream.requests[0]!.headers["x-request-id"]).toBe("ops-1");
   });
 
@@ -328,5 +328,60 @@ describe("GET /api/ops/*", () => {
     app = await buildApp(config({ upstreamUrl: "http://127.0.0.1:1" }));
 
     expect((await app.inject({ url: "/api/ops/summary" })).statusCode).toBe(502);
+  });
+});
+
+describe("agent routes", () => {
+  const runId = "0123456789abcdef0123456789abcdef";
+
+  it("starts a run and reads one back for a user", async () => {
+    const started = await ask({ question: "Raise an NCR for lot L-302." }, {}, "/api/agent/runs");
+    const read = await app.inject({ url: `/api/agent/runs/${runId}` });
+
+    expect(started.json()).toEqual({ path: "/agent/runs", method: "POST", body: { question: "Raise an NCR for lot L-302." } });
+    expect(read.json()).toEqual({ path: `/agent/runs/${runId}`, method: "GET", body: null });
+  });
+
+  it("rejects a blank question and a malformed run ID before calling the API", async () => {
+    const blank = await ask({ question: "   " }, {}, "/api/agent/runs");
+    const traversal = await app.inject({ url: "/api/agent/runs/..%2F..%2Fops%2Fsummary" });
+
+    expect([blank.statusCode, traversal.statusCode]).toEqual([400, 400]);
+    expect(upstream.requests).toHaveLength(0);
+  });
+
+  it("sets the reviewer from the admin key and ignores a reviewer claimed in the body", async () => {
+    await app.close();
+    app = await buildApp(config({ apiKeys: ["user-key"], adminKeys: ["first-admin", "second-admin"] }));
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/ops/approvals/${runId}`,
+      headers: { authorization: "Bearer second-admin" },
+      payload: { decision: "approve", reviewer: "the-ceo", reason: "checked" },
+    });
+
+    expect(response.json()).toEqual({ path: `/ops/approvals/${runId}`, method: "POST", body: { decision: "approve", reason: "checked", reviewer: "admin-2" } });
+  });
+
+  it("lets only admins decide: users get 403, anonymous 401", async () => {
+    await app.close();
+    app = await buildApp(config({ apiKeys: ["user-key"], adminKeys: ["admin-key"] }));
+    const decide = (headers: Record<string, string>) =>
+      app.inject({ method: "POST", url: `/api/ops/approvals/${runId}`, headers, payload: { decision: "reject" } });
+
+    expect((await decide({})).statusCode).toBe(401);
+    expect((await decide({ authorization: "Bearer user-key" })).statusCode).toBe(403);
+    expect((await decide({ authorization: "Bearer admin-key" })).statusCode).toBe(200);
+    expect((await ask({ question: "q" }, {}, "/api/agent/runs")).statusCode).toBe(401); // users need their key to start runs
+    expect(upstream.requests).toHaveLength(1);
+  });
+
+  it("names the reviewer local-dev when authentication is off, and validates the decision", async () => {
+    const ok = await app.inject({ method: "POST", url: `/api/ops/approvals/${runId}`, payload: { decision: "reject", reason: "wrong lot" } });
+    const bad = await app.inject({ method: "POST", url: `/api/ops/approvals/${runId}`, payload: { decision: "maybe" } });
+
+    expect(ok.json().body).toEqual({ decision: "reject", reason: "wrong lot", reviewer: "local-dev" });
+    expect(bad.statusCode).toBe(400);
   });
 });

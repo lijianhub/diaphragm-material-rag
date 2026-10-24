@@ -61,6 +61,8 @@ export async function errorFrom(response: Response): Promise<ApiError> {
     return new ApiError(`Too many requests. Try again${retry ? ` in ${retry} s` : " later"}.`, 429, id);
   }
   if (response.status === 401) return new ApiError("Not authorised: the API key is missing or wrong.", 401, id);
+  if (response.status === 409) return new ApiError("Already decided: someone else acted on this first.", 409, id);
+  if (response.status === 404) return new ApiError("Not found.", 404, id);
   if (response.status === 403) return new ApiError("This key is not allowed here: the ops dashboard needs an admin key.", 403, id);
   if (response.status === 400 || response.status === 422) return new ApiError("The question was not accepted (empty or too long).", response.status, id);
   if (response.status === 503) return new ApiError("The service is not ready yet (no document index).", 503, id);

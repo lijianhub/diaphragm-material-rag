@@ -3,13 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { jsonResponse } from "../test/fixtures";
 import Dashboard from "./Dashboard";
-import { evaluations, feedback, ingestion, summary } from "./fixtures";
+import { evaluations, feedback, finishedRun, ingestion, pendingRun, summary } from "./fixtures";
 import { LineChart } from "./LineChart";
 
 type Views = Record<string, unknown>;
 
 /** fetch stub that answers each /api/ops/<view> from `views`, or with `status` for all. */
-function stubOps(views: Views = { summary: summary(), feedback, evaluations, ingestion }, status = 200) {
+const allViews = (): Views => ({ summary: summary(), feedback, evaluations, ingestion, approvals: { pending: [pendingRun] }, "agent-runs": { runs: [finishedRun] } });
+
+function stubOps(views: Views = allViews(), status = 200) {
   const mock = vi.fn((url: string, init?: RequestInit) => {
     const view = url.replace("/api/ops/", "");
     void init;
@@ -117,11 +119,86 @@ describe("Dashboard", () => {
   });
 
   it("explains an empty run log and a missing ingestion report", async () => {
-    stubOps({ summary: summary(), feedback, evaluations: { total: 0, malformed: 0, runs: [] }, ingestion: { report: null, reason: "no ingestion report: run scripts/index.py" } });
+    stubOps({ ...allViews(), evaluations: { total: 0, malformed: 0, runs: [] }, ingestion: { report: null, reason: "no ingestion report: run scripts/index.py" } });
     render(<Dashboard />);
 
     expect(await screen.findByText(/No tracked runs yet/)).toBeInTheDocument();
     expect(await screen.findByText(/no ingestion report/)).toBeInTheDocument();
+  });
+});
+
+describe("Approvals", () => {
+  /** Ops views from fixtures; POSTs to /api/ops/approvals/<id> answered by `onDecide`. */
+  function stubWithDecision(onDecide: (body: unknown) => Response) {
+    const mock = vi.fn((url: string, init?: RequestInit) => {
+      if (url.startsWith("/api/ops/approvals/")) return Promise.resolve(onDecide(JSON.parse(String(init!.body))));
+      return Promise.resolve(jsonResponse(allViews()[url.replace("/api/ops/", "")], 200));
+    });
+    vi.stubGlobal("fetch", mock);
+    return mock;
+  }
+
+  it("shows the proposed action with its arguments, the question and the evidence", async () => {
+    stubOps();
+    render(<Dashboard />);
+
+    const item = await screen.findByRole("listitem", { name: "Pending raise nonconformance report" });
+    expect(within(item).getByText("The agent wants to raise nonconformance report")).toBeInTheDocument();
+    expect(within(item).getByText(/Lot L-302 failed inspection/)).toBeInTheDocument();
+    expect(within(item).getByText("worn blanking die")).toBeInTheDocument();
+    expect(within(item).getByText(/\[1\] forming_defects_notes.txt/)).toBeInTheDocument();
+    expect(within(item).getByRole("button", { name: "Reject" })).toBeDisabled(); // a rejection needs a reason
+  });
+
+  it("approves with the admin key and shows the run's new state", async () => {
+    const mock = stubWithDecision(() => jsonResponse({ ...pendingRun, status: "completed", pending: null, answer: "Raised NCR-1A2B3C4D.",
+      approvals: [{ ...finishedRun.approvals[0]!, decision: "approve" }] }, 200));
+    const user = userEvent.setup();
+    render(<Dashboard />);
+
+    await user.click(await screen.findByRole("button", { name: "Approve" }));
+
+    expect(await screen.findByText(/Approved\. The run is now/)).toHaveTextContent("completed");
+    expect(screen.getByText("Raised NCR-1A2B3C4D.")).toBeInTheDocument();
+    const [url, init] = mock.mock.calls.find(([u]) => u.startsWith("/api/ops/approvals/"))!;
+    expect(url).toBe(`/api/ops/approvals/${pendingRun.id}`);
+    expect(JSON.parse(String(init!.body))).toEqual({ decision: "approve" }); // no reviewer: the BFF sets it
+  });
+
+  it("rejects with a reason", async () => {
+    const bodies: unknown[] = [];
+    stubWithDecision((body) => {
+      bodies.push(body);
+      return jsonResponse({ ...finishedRun }, 200);
+    });
+    const user = userEvent.setup();
+    render(<Dashboard />);
+
+    await user.type(await screen.findByLabelText("Reason (required to reject)"), " wrong lot ");
+    await user.click(screen.getByRole("button", { name: "Reject" }));
+
+    expect(await screen.findByText(/Rejected\. The run is now/)).toBeInTheDocument();
+    expect(bodies).toEqual([{ decision: "reject", reason: "wrong lot" }]);
+  });
+
+  it("explains a decision that someone else made first", async () => {
+    stubWithDecision(() => jsonResponse({ error: "not_awaiting_approval", request_id: "r-409" }, 409));
+    const user = userEvent.setup();
+    render(<Dashboard />);
+
+    await user.click(await screen.findByRole("button", { name: "Approve" }));
+
+    expect(await screen.findByText(/Already decided: someone else acted on this first/)).toBeInTheDocument();
+  });
+
+  it("lists recent agent runs with status and who decided", async () => {
+    stubOps();
+    render(<Dashboard />);
+
+    const runs = await screen.findByRole("region", { name: "Agent runs" });
+    expect(await within(runs).findByText("What causes galling?")).toBeInTheDocument();
+    expect(within(runs).getByText("reject by admin-1")).toBeInTheDocument();
+    expect(within(runs).getByText("2,580")).toBeInTheDocument(); // tokens in + out
   });
 });
 

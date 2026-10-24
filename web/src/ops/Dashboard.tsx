@@ -1,7 +1,8 @@
 import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from "react";
 import { ApiError } from "../lib/api";
 import { count, dateTime, duration, ms, pct } from "../lib/format";
-import { type EvaluationsView, type FeedbackView, fetchView, type IngestionView, type Run, type Summary } from "./api";
+import { AgentRunsTable, ApprovalQueue } from "./Agent";
+import { type AgentRun, type EvaluationsView, type FeedbackView, fetchView, type IngestionView, type Run, type Summary } from "./api";
 import { LineChart } from "./LineChart";
 import { metricNames, type Sample, trafficRates, trend } from "./series";
 
@@ -17,6 +18,8 @@ export default function Dashboard({ refreshMs = REFRESH_MS }: { refreshMs?: numb
   const [feedback, setFeedback] = useState<Loaded<FeedbackView>>({});
   const [evaluations, setEvaluations] = useState<Loaded<EvaluationsView>>({});
   const [ingestion, setIngestion] = useState<Loaded<IngestionView>>({});
+  const [approvals, setApprovals] = useState<Loaded<{ pending: AgentRun[] }>>({});
+  const [agentRuns, setAgentRuns] = useState<Loaded<{ runs: AgentRun[] }>>({});
   const [samples, setSamples] = useState<Sample[]>([]);
   const [paused, setPaused] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number>();
@@ -35,6 +38,8 @@ export default function Dashboard({ refreshMs = REFRESH_MS }: { refreshMs?: numb
       fetchView("feedback", key).then(...settle(setFeedback)),
       fetchView("evaluations", key).then(...settle(setEvaluations)),
       fetchView("ingestion", key).then(...settle(setIngestion)),
+      fetchView("approvals", key).then(...settle(setApprovals)),
+      fetchView("agent-runs", key).then(...settle(setAgentRuns)),
     ]);
     setUpdatedAt(Date.now());
   }, [adminKey]);
@@ -54,7 +59,7 @@ export default function Dashboard({ refreshMs = REFRESH_MS }: { refreshMs?: numb
     return () => clearInterval(timer);
   }, [paused, refresh, refreshMs]);
 
-  const authError = [summary, feedback, evaluations, ingestion].map((v) => v.error).find((e) => e && (e.status === 401 || e.status === 403));
+  const authError = [summary, feedback, evaluations, ingestion, approvals, agentRuns].map((v) => v.error).find((e) => e && (e.status === 401 || e.status === 403));
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -62,7 +67,7 @@ export default function Dashboard({ refreshMs = REFRESH_MS }: { refreshMs?: numb
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-4">
           <div>
             <h1 className="text-lg font-semibold text-slate-900">Operations</h1>
-            <p className="text-sm text-slate-500">Diaphragm Material Assistant · service, cost, feedback, evaluation, ingestion</p>
+            <p className="text-sm text-slate-500">Diaphragm Material Assistant · approvals, service, cost, feedback, evaluation, agent, ingestion</p>
           </div>
           <div className="flex items-center gap-3 text-sm text-slate-600">
             <span>{updatedAt ? `Updated ${new Date(updatedAt).toLocaleTimeString("en-GB")}` : "Loading…"}</span>
@@ -77,12 +82,20 @@ export default function Dashboard({ refreshMs = REFRESH_MS }: { refreshMs?: numb
       </header>
       <main className="mx-auto max-w-6xl space-y-6 px-4 py-6">
         {authError && <KeyForm error={authError} onKey={setAdminKey} />}
+        <Section title="Approvals" note="Agent actions with side effects run only after a person approves them.">
+          {approvals.error && <Failed error={approvals.error} />}
+          {approvals.data && <ApprovalQueue pending={approvals.data.pending} adminKey={adminKey} onDecided={() => void refresh()} />}
+        </Section>
         <ServiceSection loaded={summary} samples={samples} refreshMs={refreshMs} />
         <div className="grid gap-6 lg:grid-cols-2">
           <CostSection loaded={summary} />
           <FeedbackSection loaded={feedback} />
         </div>
         <EvaluationSection loaded={evaluations} />
+        <Section title="Agent runs" note="Newest first. Waiting for approval does not count against a run's time limit.">
+          {agentRuns.error && <Failed error={agentRuns.error} />}
+          {agentRuns.data && <AgentRunsTable runs={agentRuns.data.runs} />}
+        </Section>
         <IngestionSection loaded={ingestion} />
       </main>
     </div>
