@@ -188,6 +188,7 @@ class CaseResult:
     forbidden_hits: List[str]
     model: str = ""
     usage: Optional[dict] = None
+    prompt_version: str = ""
 
 
 def _contains_evidence(text: str, evidence: Sequence[str]) -> bool:
@@ -241,6 +242,7 @@ def score_case(case: GenerationCase, answer) -> CaseResult:
         forbidden_hits=hits,
         model=getattr(answer, "model", ""),
         usage=getattr(answer, "usage", None),
+        prompt_version=getattr(answer, "prompt_version", ""),
     )
 
 

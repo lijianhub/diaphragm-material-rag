@@ -30,6 +30,7 @@ from ingestion.loader import load_documents
 from generation import CachedLLM, create_llm
 from query import LLMQueryRewriter, decompose, retrieve
 from reranking import create_reranker
+from tracking import TRACKER_KINDS, RunRecord, create_tracker, log_safely, version_tags
 from retrieval.index import FUSION_METHODS, LEXICAL_SCORERS, SearchIndex
 from vectorstore import STORE_KINDS
 
@@ -60,6 +61,8 @@ def main() -> None:
     parser.add_argument("--chunk-size", type=int, default=300)
     parser.add_argument("--overlap", type=int, default=50)
     parser.add_argument("--output", type=Path, default=REPO_ROOT / "evaluation" / "results.jsonl")
+    parser.add_argument("--track", choices=TRACKER_KINDS, default="none", help="record the run: jsonl (runs/runs.jsonl) or mlflow")
+    parser.add_argument("--run-name", default=None, help="name of the tracked run (default: a summary of the configuration)")
     args = parser.parse_args()
 
     # Only the tracked sample files (txt, md, html, csv), so scores are reproducible on every clone.
@@ -110,6 +113,31 @@ def main() -> None:
     if shown.is_relative_to(REPO_ROOT):
         shown = shown.relative_to(REPO_ROOT)
     print(f"per-question results written to {shown}")
+
+    if args.track != "none":
+        params = {
+            "kind": "retrieval", "k": args.k, "alpha": args.alpha, "lexical": args.lexical, "stem": args.stem,
+            "fusion": args.fusion, "rrf_k": args.rrf_k, "embedder": index.embedder.name, "reranker": args.reranker or "none",
+            "rerank_depth": args.rerank_depth, "dedupe": args.dedupe, "decompose": args.decompose,
+            "query_fusion": args.query_fusion, "rewrite": args.rewrite or "none", "rewrite_llm": args.llm if args.rewrite else "none",
+            "prf": args.prf, "store": args.store, "chunk_size": args.chunk_size, "overlap": args.overlap,
+            "questions": len(examples), "documents": len(corpus), "chunks": len(index),
+        }
+        metrics = {f"hit@{report.k}": report.hit_rate, f"recall@{report.k}": report.recall, f"mrr@{report.k}": report.mrr}
+        for category, score in report.by_category().items():
+            metrics.update({f"{category}.hit@{report.k}": score.hit_rate, f"{category}.recall@{report.k}": score.recall})
+        if args.rewrite:
+            metrics.update({"llm_calls_new": rewriter_llm.misses, "llm_calls_cached": rewriter_llm.hits})
+        tags = version_tags(
+            REPO_ROOT,
+            {"questions": REPO_ROOT / "evaluation" / "questions.jsonl", "ground_truth": REPO_ROOT / "evaluation" / "ground_truth.jsonl"},
+            corpus,
+        )
+        name = args.run_name or f"retrieval {index.embedder.name} {args.fusion} a={args.alpha} k={args.k}" + (f" rerank" if args.reranker else "") + (f" {args.rewrite}" if args.rewrite else "")
+        run_id = log_safely(create_tracker(args.track, REPO_ROOT), RunRecord(name, {k: str(v) for k, v in params.items()}, metrics, tags, [str(args.output)]))
+        if run_id:
+            dirty = " (working tree has uncommitted changes)" if tags["git_dirty"] == "true" else ""
+            print(f"tracked run {run_id} with {args.track}{dirty}")
 
 
 if __name__ == "__main__":

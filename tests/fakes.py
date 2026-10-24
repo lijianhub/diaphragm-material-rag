@@ -137,3 +137,53 @@ class FakeOpenAIClient:
     def _create(self, **kwargs):
         self.calls.append(kwargs)
         return self._response
+
+
+class FakeMlflow:
+    """Stands in for the ``mlflow`` module: records experiments, runs, params, metrics,
+    tags and artifacts, so MlflowTracker is tested without MLflow installed."""
+
+    class _Run:
+        def __init__(self, run_id):
+            self.info = type("Info", (), {"run_id": run_id})()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def __init__(self, existing_experiments=()):
+        self.tracking_uri = None
+        self.experiments = {name: {"artifact_location": None} for name in existing_experiments}
+        self.active_experiment = None
+        self.runs = []
+
+    def set_tracking_uri(self, uri):
+        self.tracking_uri = uri
+
+    def get_experiment_by_name(self, name):
+        return self.experiments.get(name)
+
+    def create_experiment(self, name, artifact_location=None):
+        self.experiments[name] = {"artifact_location": artifact_location}
+
+    def set_experiment(self, name):
+        self.experiments.setdefault(name, {"artifact_location": None})
+        self.active_experiment = name
+
+    def start_run(self, run_name=None):
+        self.runs.append({"name": run_name, "experiment": self.active_experiment, "params": {}, "metrics": {}, "tags": {}, "artifacts": []})
+        return self._Run(f"run-{len(self.runs)}")
+
+    def log_params(self, params):
+        self.runs[-1]["params"].update(params)
+
+    def log_metrics(self, metrics):
+        self.runs[-1]["metrics"].update(metrics)
+
+    def set_tags(self, tags):
+        self.runs[-1]["tags"].update(tags)
+
+    def log_artifact(self, path):
+        self.runs[-1]["artifacts"].append(path)

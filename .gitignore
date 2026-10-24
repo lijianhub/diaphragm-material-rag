@@ -24,6 +24,12 @@ htmlcov/
 # Local LLM response cache (may contain document text)
 .cache/
 
+# Experiment tracking (local MLflow store and artifacts, JSONL run log)
+mlflow.db
+mlartifacts/
+mlruns/
+runs/
+
 # Jupyter
 .ipynb_checkpoints/
 

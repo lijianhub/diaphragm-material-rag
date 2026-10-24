@@ -32,6 +32,7 @@ from evaluation import CASE_TYPES, benchmark_corpus, evaluate_generation, load_g
 from generation import CachedLLM, RAGPipeline, create_llm
 from ingestion.loader import load_documents
 from retrieval.index import SearchIndex
+from tracking import TRACKER_KINDS, RunRecord, create_tracker, log_safely, version_tags
 
 
 def _fmt(value: float) -> str:
@@ -47,6 +48,8 @@ def main() -> None:
     parser.add_argument("--gate", action="store_true", help="exit with status 1 if any gate fails")
     parser.add_argument("--show", choices=("failures", "all", "none"), default="failures", help="which answers to print")
     parser.add_argument("--output", type=Path, default=REPO_ROOT / "evaluation" / "generation_results.jsonl")
+    parser.add_argument("--track", choices=TRACKER_KINDS, default="none", help="record the run: jsonl (runs/runs.jsonl) or mlflow")
+    parser.add_argument("--run-name", default=None, help="name of the tracked run")
     args = parser.parse_args()
 
     corpus = benchmark_corpus(REPO_ROOT / "data" / "raw")
@@ -96,6 +99,39 @@ def main() -> None:
             handle.write(json.dumps(asdict(r), ensure_ascii=False) + "\n")
     shown = args.output.resolve()
     print(f"\nper-case results written to {shown.relative_to(REPO_ROOT) if shown.is_relative_to(REPO_ROOT) else shown}")
+    if args.track != "none":
+        served = sorted({r.model for r in report.results if r.model})
+        prompts = sorted({r.prompt_version for r in report.results if r.prompt_version})
+        params = {
+            "kind": "generation", "answerer": args.llm or "extractive", "served_models": ",".join(served) or "none",
+            "prompt_version": ",".join(prompts) or "none", "embedder": index.embedder.name, "top_k": args.top_k,
+            "types": ",".join(args.types), "cases": len(cases),
+        }
+        metrics = {k: v for k, v in report.metrics().items() if v == v}  # drop NaN (an absent case type)
+        for kind in args.types:
+            group = report.of_type(kind)
+            if group:
+                metrics[f"{kind}.correct"] = sum(r.correct for r in group) / len(group)
+        gates = report.gates()
+        metrics.update({f"gate.{name}": float(passed) for name, (_, _, passed) in gates.items()})
+        metrics["gates_passed"] = float(sum(passed for _, _, passed in gates.values()))
+        if llm:
+            metrics.update({"llm_calls_new": llm.misses, "llm_calls_cached": llm.hits, "tokens_in": tokens_in, "tokens_out": tokens_out})
+        tags = version_tags(
+            REPO_ROOT,
+            {
+                "questions": REPO_ROOT / "evaluation" / "questions.jsonl",
+                "ground_truth": REPO_ROOT / "evaluation" / "ground_truth.jsonl",
+                "generation_cases": REPO_ROOT / "evaluation" / "generation_cases.jsonl",
+            },
+            corpus,
+        )
+        tags["gates"] = "pass" if report.passed else "fail"
+        name = args.run_name or f"generation {args.llm or 'extractive'} {','.join(prompts)}"
+        run_id = log_safely(create_tracker(args.track, REPO_ROOT), RunRecord(name, {k: str(v) for k, v in params.items()}, metrics, tags, [str(args.output)]))
+        if run_id:
+            dirty = " (working tree has uncommitted changes)" if tags["git_dirty"] == "true" else ""
+            print(f"tracked run {run_id} with {args.track}{dirty}")
     if args.gate and not report.passed:
         sys.exit(1)
 
