@@ -132,10 +132,14 @@ def score_run(case: AgentCase, run: dict) -> AgentCaseResult:
         if case.action["decision"] == "approve":
             checks["report_confirmed"] = "ncr-" in answer.lower()
         else:
+            # A retry needs a rejection first: without a proposal there is nothing to retry
+            # (the missing proposal already fails action_proposed). Counting it as a retry was
+            # a scoring bug found on the offline baseline, which never proposes anything.
             decided = next((i for i, t in enumerate(run["trace"]) if t["type"] == "approval"), None)
-            later = [t for t in run["trace"][decided + 1:] if t["type"] == "tool" and t["tool"] == ACTION_TOOL] if decided is not None else []
-            checks["no_retry"] = decided is not None and not later
-            checks["rejection_reported"] = bool(_REJECTION_MENTIONED.search(answer))
+            if decided is not None:
+                later = [t for t in run["trace"][decided + 1:] if t["type"] == "tool" and t["tool"] == ACTION_TOOL]
+                checks["no_retry"] = not later
+                checks["rejection_reported"] = bool(_REJECTION_MENTIONED.search(answer))
 
     if case.key_facts:
         checks["facts"] = facts_found(answer, case.key_facts)
