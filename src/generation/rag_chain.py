@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Sequence
 
@@ -30,6 +31,7 @@ class Answer:
     prompt_version: str = ""
     usage: Optional[dict] = None  # token counts when an LLM was called
     refused: bool = False  # every sentence says the sources lack the answer
+    timings: dict = field(default_factory=dict)  # milliseconds per stage: retrieval, generation
 
 
 _SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
@@ -98,6 +100,7 @@ class RAGPipeline:
         return self.index.search(question, top_k=self.top_k)
 
     def answer(self, question: str, documents: Optional[Sequence[str]] = None) -> Answer:
+        started = time.perf_counter()
         if documents is not None:
             # Plain passages (quick experiments, no index): treat them as ranked sources.
             from retrieval.index import SearchResult
@@ -106,8 +109,10 @@ class RAGPipeline:
         else:
             results = self._retrieve(question)
 
+        retrieved = time.perf_counter()
+        timings = {"retrieval_ms": round((retrieved - started) * 1000, 2)}
         if not results:
-            return Answer(text=ExtractiveAnswerer.NOT_FOUND, model="none", refused=True)
+            return Answer(text=ExtractiveAnswerer.NOT_FOUND, model="none", refused=True, timings=timings)
 
         prompt = build_prompt(question, results, self.max_context_tokens)
         offered = list(results[: prompt.included])
@@ -126,6 +131,7 @@ class RAGPipeline:
                 reason = f"{type(exc).__name__}: {exc}"
         if text is None:
             text = self.extractive.answer(question, offered)
+        timings["generation_ms"] = round((time.perf_counter() - retrieved) * 1000, 2)
 
         # A sentence saying the answer is not in the sources must not cite them.
         text, refused = strip_refusal_citations(text)
@@ -146,4 +152,5 @@ class RAGPipeline:
             prompt_version=prompt.version,
             usage=usage,
             refused=refused,
+            timings=timings,
         )

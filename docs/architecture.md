@@ -48,13 +48,14 @@ question ─► [transforms] ─► first-stage retrieval per query (BM25 + dens
 
 | Failure | Current handling | Planned |
 |---|---|---|
-| **Invalid input** (unsupported, corrupted or scanned file) | Reported per file in `IngestResult.failures`; the batch continues; a file that fails keeps its last indexed version | API-level request validation with Pydantic (empty or oversized questions) |
-| **No retrieval results** | No LLM call; answer says the information isn't in the sources | Logged as a metric; surfaced on the ops dashboard |
-| **Model or tool timeout / outage** | Bedrock calls: exponential backoff on throttling, bounded retries; LLM failure → extractive answer with `fallback_reason` | Timeouts on every external call; error-rate metrics and alerts |
+| **Invalid input** (unsupported, corrupted or scanned file; empty or oversized question) | Files: reported per file in `IngestResult.failures`; the batch continues; a file that fails keeps its last indexed version. Questions: Pydantic validation in the API → 422 with a request ID | — |
+| **No retrieval results** | No LLM call; answer says the information isn't in the sources; counted as `refused` in `rag_answers_total` | Surfaced on the ops dashboard |
+| **Model or tool timeout / outage** | Bedrock calls: exponential backoff on throttling, bounded retries; LLM calls in the service: 30 s timeout, 1 retry; LLM failure → extractive answer with `fallback_reason`, counted as `fallback` | Alerts on error and fallback rates |
 | **Malformed model output** | Citation numbers are parsed and validated; numbers that point to no source go to `invalid_citations` | Structured-output validation; regression tests on fixed samples |
-| **Insufficient evidence** | Prompt rule: say when the answer isn't in the sources. ⚠️ The offline extractive answerer cannot detect this (known limitation) | Generation evaluation with unanswerable questions; refusal-correctness metric |
+| **Insufficient evidence** | Prompt rule: say when the answer isn't in the sources, with no citation on that sentence (enforced in code). Measured: 12/12 clean refusals with `gpt-5.4-mini@low`. ⚠️ The offline extractive answerer cannot detect this (0/12) | — |
 | **Embedding model changed** | `load()` refuses an index built with a different embedder; a rebuild is required | — |
-| **Prompt injection in documents** | Angle brackets escaped inside `<source>` blocks; sources declared as data, not instructions | Upload permissions, audit logging, output checks |
+| **Prompt injection in documents or questions** | Angle brackets escaped in sources and in the question; sources declared as data; 8 malicious cases in the generation benchmark | Upload permissions, audit logging |
+| **Unexpected server error** | API returns `500 internal_error` with the request ID and no internals; the exception type is logged | Alerts |
 
 ## Deterministic Code vs LLM
 
@@ -64,7 +65,7 @@ question ─► [transforms] ─► first-stage retrieval per query (BM25 + dens
 | Retrieval scoring and fusion | Deterministic code + embedding models | Measurable on the benchmark |
 | Reranking | Cross-encoder model | Pairwise relevance judgement |
 | Query rewriting (multi-query, HyDE) | LLM, optional | Bridging vocabulary gaps; falls back to the original question |
-| Writing the answer | LLM (planned); extractive fallback | Synthesis across sources |
+| Writing the answer | LLM; extractive fallback | Synthesis across sources |
 | Citation checking, budget, escaping | Deterministic code | Safety checks must not depend on the model |
 | Deciding to act (agent, planned) | LLM proposes, code enforces limits, a human approves side effects | Bounded autonomy |
 
@@ -72,9 +73,11 @@ question ─► [transforms] ─► first-stage retrieval per query (BM25 + dens
 
 - **Index manifest:** format version, embedder name and dimension, chunker settings, search settings (alpha, fusion, rerank depth, dedupe), reranker name and a content hash per document.
 - **Answers:** citations map to source file, section and character offsets; the prompt used is attached to the `Answer`.
-- **Planned:** model ID and prompt version on every answer; experiment tracking (MLflow) for benchmark runs; request IDs through every layer.
+- **Answers** also record the served model, the prompt version (label + SHA-256 fingerprint), token usage and stage timings.
+- **Evaluation runs** are tracked in MLflow or JSONL with their configuration, git commit, dirty flag and data hashes ([15-experiment-tracking.md](15-experiment-tracking.md)).
+- **Requests** carry an `X-Request-ID` that appears in the response, the error body and the log line ([14-production-rag.md](14-production-rag.md)). Planned: the same ID through the backend-for-frontend.
 
-## Planned Service Layers
+## Service Layers
 
 ```
 Browser
@@ -84,11 +87,11 @@ Browser
  Node.js backend-for-frontend (TypeScript, Fastify)
          request IDs, rate limiting, authentication, streaming, dashboard aggregation
          │ HTTP JSON
- Python FastAPI service (this repository's pipeline)
-         /query /ingest /evaluate /metrics /health · structured logs · versioned answers
+ Python FastAPI service (implemented: src/api)
+         /ask /health /ready /metrics · request IDs · JSON logs · versioned answers
 ```
 
-The backend-for-frontend is a common pattern that keeps browser concerns (sessions, streaming, aggregation) out of the Python service. A minimal deployment could have React call FastAPI directly.
+The React apps and the backend-for-frontend are planned. The backend-for-frontend is a common pattern that keeps browser concerns (sessions, streaming, aggregation) out of the Python service. A minimal deployment could have React call FastAPI directly.
 
 ## Deployment Target
 
