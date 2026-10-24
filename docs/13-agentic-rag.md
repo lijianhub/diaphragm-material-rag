@@ -92,6 +92,10 @@ The transcript is provider-neutral and JSON-serialisable; each backend translate
 
 Total for this step's measurements, including one ping: about 17,500 tokens. Case A also shows the cost of autonomy: four searches for a question the corpus cannot answer used four times the tokens of case C.
 
+## Evaluation
+
+The agent benchmark (28 frozen cases, a simulated reviewer, safety gates at zero tolerance) is described with its results in [11-rag-evaluation.md](11-rag-evaluation.md#agent-evaluation): `gpt-5.4-mini@low` passes all 9 gates (27/28 cases; the one miss is a correct refusal that the evaluator does not recognise), and the offline rule planner passes the safety gates but none of the action gates.
+
 ## Design decisions
 
 | Decision | Alternatives | Why |
@@ -106,7 +110,6 @@ Total for this step's measurements, including one ping: about 17,500 tokens. Cas
 
 ## Not yet included
 
-- **Agent evaluation** (step 21): a fixed set of tasks with expected tool calls, refusals and approval behaviour, frozen before changes are judged
 - **A user-facing agent page** in the web app; runs start from the CLI or the API
 - **Run ownership:** any user key can read any run by its (unguessable, 128-bit) ID; per-user access comes with real identity (step 24)
 - **Editing an action before approval**; today a reviewer approves or rejects the exact call

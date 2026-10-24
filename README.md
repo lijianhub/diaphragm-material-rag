@@ -28,7 +28,8 @@ The goal is a small but complete AI service that is **evaluated, tested and expl
 | Node.js backend-for-frontend (TypeScript, Fastify): SSE pass-through, rate limiting, API-key auth stub, CORS, request IDs | ✅ Implemented and tested (Vitest) | Authentication is a stub; see [docs/16](docs/16-backend-for-frontend.md) |
 | React user app: streamed answers, citation links to sources, stop, 👍/👎 feedback stored with the answer's request ID | ✅ Implemented and tested (Vitest, React Testing Library) | Checked end to end with curl through the dev proxy, not yet in a real browser; see [docs/17](docs/17-web-app.md) |
 | React ops dashboard: service health, latency percentiles, tokens per model, feedback, evaluation trends (comparable runs only), ingestion failures; admin keys | ✅ Implemented and tested (pytest, Vitest) | Checked end to end through the dev proxy, not yet in a real browser; no history or alerts (Prometheus and Grafana at deployment); see [docs/18](docs/18-ops-dashboard.md) |
-| Agent workflow: native tool calling (OpenAI, Anthropic), schema-validated tools, step/tool/token/time limits, persisted runs, human approval for side effects (approval queue on the dashboard) | ✅ Implemented, tested, measured with OpenAI | Anthropic tool use tested with fakes only; no agent benchmark yet (next step); see [docs/13](docs/13-agentic-rag.md) |
+| Agent workflow: native tool calling (OpenAI, Anthropic), schema-validated tools, step/tool/token/time limits, persisted runs, human approval for side effects (approval queue on the dashboard) | ✅ Implemented, tested, measured with OpenAI | Anthropic tool use tested with fakes only; see [docs/13](docs/13-agentic-rag.md) |
+| Agent benchmark: 28 frozen cases (answer, lookup, action, no action, unanswerable, injection, rejection), simulated reviewer, safety and quality gates | ✅ Implemented, tested, measured with OpenAI | All 9 gates pass with `gpt-5.4-mini@low` (27/28; the miss is an evaluator false negative); 28 cases is small; see [docs/11](docs/11-rag-evaluation.md#agent-evaluation) |
 | Docker, CI, AWS deployment, operations runbook | 🔜 Planned | |
 
 ## Architecture
@@ -70,6 +71,7 @@ pip install -e .[aws]                # boto3: Bedrock embeddings and reranking
 pip install -e .[llm]                # anthropic + openai SDKs: LLM answers and query rewriting
 cp .env.example .env                 # add OPENAI_API_KEY or ANTHROPIC_API_KEY and RAG_LLM (git-ignored)
 python scripts/check_llm.py          # verify configuration without printing secrets
+python scripts/evaluate_agent.py --llm openai:<model>@low --gate        # agent benchmark (turns cached); offline without --llm
 python scripts/evaluate_generation.py --llm openai:<model>@low --gate   # LLM answers; exit 1 if a gate fails
 pip install -e .[tracking]           # MLflow experiment tracking
 pip install -e .[api] && python scripts/serve.py      # HTTP API on :8000 (docs at /docs)
@@ -163,11 +165,11 @@ Topic documents: [RAG fundamentals](docs/01-rag-fundamentals.md) · [agentic RAG
 - **General-domain models:** the embedding and reranking models were trained on web data; one paraphrase question (q33) is missed by every configuration.
 - **Bedrock components** are tested with fakes only, not yet against a live AWS account.
 - **Scanned PDFs** need OCR, which is not included.
+- **Agent benchmark size:** 28 cases; zero unrequested actions in 19 cases bounds the true rate at about 16% (rule of three). The approval gate in code, not the benchmark, is what makes an unrequested action harmless.
 
 ## Roadmap
 
-1. Agent evaluation: fixed tasks with expected tool calls, refusals and approval behaviour
-2. Docker Compose, GitHub Actions CI (running the generation gates and logging runs), AWS deployment and an operations runbook
+1. Docker Compose, GitHub Actions CI (running the generation gates and logging runs), AWS deployment and an operations runbook
 
 ## Contributing
 
