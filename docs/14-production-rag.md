@@ -26,6 +26,7 @@ curl -s localhost:8000/metrics
 | Endpoint | Purpose | Status codes |
 |---|---|---|
 | `POST /ask` | answer with citations, sources, refused flag, model, prompt version, tokens, stage timings | 200; 422 invalid request; 503 no index; 500 unexpected error |
+| `POST /ask/stream` | the same answer as Server-Sent Events: `sources`, `delta`…, `final` (or `error`); see [16-backend-for-frontend.md](16-backend-for-frontend.md) | 422 and 503 before the stream starts; afterwards an in-band `error` event |
 | `GET /health` | **liveness**: the process is up | 200 |
 | `GET /ready` | **readiness**: the index is loaded; also reports chunks, embedder and answerer | 200, or 503 with a reason |
 | `GET /metrics` | Prometheus text format | 200 |
@@ -60,7 +61,7 @@ One JSON object per request on stdout:
 |---|---|---|---|
 | `http_requests_total` | counter | method, route, status | traffic and error rate |
 | `http_request_duration_seconds` | histogram | route | latency percentiles |
-| `rag_stage_duration_seconds` | histogram | stage (retrieval, generation) | where the time goes |
+| `rag_stage_duration_seconds` | histogram | stage (retrieval, first_token, generation) | where the time goes; `first_token` only for streamed answers |
 | `rag_answers_total` | counter | outcome (answered, refused, fallback) | refusal and fallback rates |
 | `rag_llm_calls_total` | counter | model | call volume per model |
 | `rag_llm_tokens_total` | counter | model, direction (input, output) | **cost**: tokens × the model's price |
@@ -98,7 +99,6 @@ Persistent index (52 chunks, hashing embedder), benchmark questions sent over HT
 
 ## Not yet included
 
-- **Streaming** of the answer (planned in the backend-for-frontend with Server-Sent Events).
 - **Ingestion and evaluation endpoints**: indexing and evaluation run as scripts.
 - **Authentication, rate limiting** (backend-for-frontend), **TLS** (deployment).
 - **Distributed tracing** (OpenTelemetry spans); the request ID is the current correlation key.

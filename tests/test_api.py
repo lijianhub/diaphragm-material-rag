@@ -265,3 +265,68 @@ def test_stream_records_time_to_first_token_in_metrics():
     client.post("/ask/stream", json={"question": "How is springback compensated?"})
 
     assert 'rag_stage_duration_seconds_count{stage="first_token"} 1' in client.get("/metrics").text
+
+
+def test_closing_the_async_stream_closes_the_sync_generator():
+    # Starlette never closes a sync generator when the client disconnects; closing_stream does.
+    import asyncio
+
+    from api.main import closing_stream
+
+    state = {"closed": False}
+
+    def events():
+        try:
+            yield "first"
+            yield "second"
+        finally:
+            state["closed"] = True  # where the LLM stream gets closed
+
+    async def consume_one_and_disconnect():
+        stream = closing_stream(events())
+        assert await stream.__anext__() == "first"
+        await stream.aclose()  # what a client disconnect does to the response body iterator
+
+    asyncio.run(consume_one_and_disconnect())
+
+    assert state["closed"]
+
+
+def test_a_client_disconnect_closes_the_llm_stream_on_a_real_server():
+    # The unit tests above close generators directly; only a real server showed that a
+    # disconnect left the LLM stream open (it kept generating for a client that was gone).
+    import threading
+    import time
+
+    import httpx
+    import uvicorn
+
+    class SlowLLM(FakeStreamingLLM):
+        def stream_chat(self, system, user):
+            for piece in super().stream_chat(system, user):
+                time.sleep(0.05)
+                yield piece
+
+    llm = SlowLLM(pieces=[f"word{i} " for i in range(60)])  # 3 s if nobody stops it
+    server = uvicorn.Server(uvicorn.Config(create_app(Settings(index_dir="none"), index=_index(), llm=llm), host="127.0.0.1", port=0, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        deadline = time.time() + 10
+        while not server.started and time.time() < deadline:
+            time.sleep(0.02)
+        port = server.servers[0].sockets[0].getsockname()[1]
+
+        with httpx.Client(timeout=10) as client:
+            with client.stream("POST", f"http://127.0.0.1:{port}/ask/stream", json={"question": "springback?"}) as response:
+                for line in response.iter_lines():
+                    if line.startswith("event: delta"):
+                        break  # the user closes the page after the first words
+        deadline = time.time() + 2
+        while not llm.closed_early and time.time() < deadline:
+            time.sleep(0.05)
+
+        assert llm.closed_early and not llm.finished
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)

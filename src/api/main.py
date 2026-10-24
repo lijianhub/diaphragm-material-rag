@@ -74,6 +74,47 @@ def _error(request_id: str, status: int, error: str, detail: Any = None) -> JSON
     return JSONResponse(status_code=status, content=body, headers={"X-Request-ID": request_id})
 
 
+class ClosingStreamingResponse(StreamingResponse):
+    """A StreamingResponse that always closes its body iterator.
+
+    With ASGI 2.4 servers (Uvicorn), Starlette does not watch for disconnects while
+    streaming; the next ``send`` after a disconnect raises, and the exception leaves the
+    ``async for`` loop without ``aclose()``, so the generator is abandoned mid-stream and its
+    ``finally`` (which closes the LLM stream) never runs. The model keeps generating, and
+    billing, for a client that is gone. Closing here makes cancellation reach the model.
+    """
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            aclose = getattr(self.body_iterator, "aclose", None)
+            if aclose is not None:
+                await aclose()
+
+
+async def closing_stream(events):
+    """Serve a synchronous generator as an async one, and close it when the client goes.
+
+    Starlette iterates a sync generator in a thread pool and, on client disconnect, only
+    cancels its own wrapper: the generator is never closed, so its ``finally`` blocks never
+    run and the LLM stream keeps generating (and billing) to the end. Here each ``next()``
+    runs in a worker thread; cancellation waits for that step to return (so the generator is
+    never closed mid-step), and ``finally`` closes the generator, which closes the LLM stream.
+    """
+    import anyio
+
+    done = object()
+    try:
+        while True:
+            item = await anyio.to_thread.run_sync(next, events, done)
+            if item is done:
+                return
+            yield item
+    finally:
+        events.close()
+
+
 def _sse(event: str, data: dict) -> str:
     """One Server-Sent Event. ``data`` is a single JSON line, so newlines in the text are safe."""
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -239,7 +280,8 @@ def create_app(settings: Optional[Settings] = None, *, index=None, llm=None, met
                 _log(fields)
 
         headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}  # no proxy buffering of the stream
-        return StreamingResponse(events(), media_type="text/event-stream", headers=headers)
+        # closing_stream: a client disconnect must close the generator, and with it the LLM stream.
+        return ClosingStreamingResponse(closing_stream(events()), media_type="text/event-stream", headers=headers)
 
     @app.get("/metrics", response_class=PlainTextResponse)
     def prometheus_metrics():

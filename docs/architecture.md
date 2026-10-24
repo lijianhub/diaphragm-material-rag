@@ -75,7 +75,7 @@ question ─► [transforms] ─► first-stage retrieval per query (BM25 + dens
 - **Answers:** citations map to source file, section and character offsets; the prompt used is attached to the `Answer`.
 - **Answers** also record the served model, the prompt version (label + SHA-256 fingerprint), token usage and stage timings.
 - **Evaluation runs** are tracked in MLflow or JSONL with their configuration, git commit, dirty flag and data hashes ([15-experiment-tracking.md](15-experiment-tracking.md)).
-- **Requests** carry an `X-Request-ID` that appears in the response, the error body and the log line ([14-production-rag.md](14-production-rag.md)). Planned: the same ID through the backend-for-frontend.
+- **Requests** carry an `X-Request-ID` that appears in the response, the error body and the log line ([14-production-rag.md](14-production-rag.md)). The backend-for-frontend forwards the same ID, so one request has one ID in every log.
 
 ## Service Layers
 
@@ -84,14 +84,14 @@ Browser
  ├─ React user app        ask, read cited answers, open sources, give feedback
  └─ React ops dashboard   latency, errors, cost, evaluation trends, ingestion failures, approval queue
          │ HTTP + Server-Sent Events
- Node.js backend-for-frontend (TypeScript, Fastify)
-         request IDs, rate limiting, authentication, streaming, dashboard aggregation
+ Node.js backend-for-frontend (implemented: bff/, TypeScript, Fastify)
+         request IDs, rate limiting, API-key auth stub, CORS, SSE pass-through, cancellation
          │ HTTP JSON
  Python FastAPI service (implemented: src/api)
-         /ask /health /ready /metrics · request IDs · JSON logs · versioned answers
+         /ask /ask/stream /health /ready /metrics · request IDs · JSON logs · versioned answers
 ```
 
-The React apps and the backend-for-frontend are planned. The backend-for-frontend is a common pattern that keeps browser concerns (sessions, streaming, aggregation) out of the Python service. A minimal deployment could have React call FastAPI directly.
+The React apps are planned. The backend-for-frontend ([16-backend-for-frontend.md](16-backend-for-frontend.md)) is a common pattern that keeps browser concerns (sessions, streaming, aggregation) out of the Python service. A minimal deployment could have React call FastAPI directly.
 
 ## Deployment Target
 

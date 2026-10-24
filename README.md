@@ -24,7 +24,9 @@ The goal is a small but complete AI service that is **evaluated, tested and expl
 | Generation evaluation: 71 cases (answerable, unanswerable, ambiguous, malicious), rule-based scoring, pass/fail gates | ✅ Implemented, tested, measured with OpenAI | All 6 gates pass with `gpt-5.4-mini@low`; ambiguity handling (2/6) is reported, not gated |
 | Experiment tracking: MLflow or JSONL runs with configuration, metrics, git commit and dataset hashes | ✅ Implemented, tested, used | Optional extra; local SQLite store; see [docs/15](docs/15-experiment-tracking.md) |
 | HTTP API (FastAPI): `/ask`, liveness and readiness, request IDs, JSON logs, Prometheus metrics (latency, outcomes, tokens per model) | ✅ Implemented, tested, load-tested locally | Optional extra; see [docs/14](docs/14-production-rag.md) |
-| Node.js backend-for-frontend, React user app and ops dashboard | 🔜 Planned | |
+| Streaming answers (Server-Sent Events: sources, text deltas, checked final answer) with cancellation down to the LLM | ✅ Implemented, tested on a real server, measured | A client disconnect stops generation |
+| Node.js backend-for-frontend (TypeScript, Fastify): SSE pass-through, rate limiting, API-key auth stub, CORS, request IDs | ✅ Implemented and tested (Vitest) | Authentication is a stub; see [docs/16](docs/16-backend-for-frontend.md) |
+| React user app and ops dashboard | 🔜 Planned | |
 | Agent workflow with tool limits and human approval | 🔜 Planned | |
 | Docker, CI, AWS deployment, operations runbook | 🔜 Planned | |
 
@@ -70,6 +72,7 @@ python scripts/check_llm.py          # verify configuration without printing sec
 python scripts/evaluate_generation.py --llm openai:<model>@low --gate   # LLM answers; exit 1 if a gate fails
 pip install -e .[tracking]           # MLflow experiment tracking
 pip install -e .[api] && python scripts/serve.py      # HTTP API on :8000 (docs at /docs)
+cd bff && npm install && npm run dev && npm test      # Node.js BFF on :3000 (needs the API)
 python scripts/evaluate.py --track mlflow && python scripts/compare_runs.py   # record runs, compare them
 
 python scripts/index.py --rebuild --embedder st:sentence-transformers/all-MiniLM-L6-v2 --store faiss
@@ -136,7 +139,8 @@ src/
   generation/    grounded prompt, citations, RAGPipeline, extractive answers
   evaluation/    retrieval metrics, generation scoring and gates, dataset, benchmark corpus
   tracking/      run records, version fingerprints; null, JSONL and MLflow trackers
-  api/           FastAPI app, schemas, Prometheus-format metrics
+  api/           FastAPI app (JSON and streaming), schemas, Prometheus-format metrics
+bff/             Node.js backend-for-frontend (TypeScript, Fastify, Vitest)
 scripts/         index.py, query.py, serve.py, evaluate.py, evaluate_generation.py, compare_runs.py, check_llm.py
 evaluation/      questions.jsonl, ground_truth.jsonl, generation_cases.jsonl, results
 data/raw/        redistributable sample documents (txt, md, html, csv)
@@ -144,7 +148,7 @@ docs/            one document per topic (fundamentals, ingestion, parsing, chunk
 tests/           unit tests, fakes for model SDKs, in-code builders for PDF/DOCX/XLSX
 ```
 
-Topic documents: [RAG fundamentals](docs/01-rag-fundamentals.md) · [ingestion](docs/02-document-ingestion.md) · [parsing](docs/03-document-parsing.md) · [chunking](docs/04-chunking.md) · [embeddings](docs/05-embeddings.md) · [vector database](docs/06-vector-database.md) · [reranking](docs/08-reranking.md) · [query transformation](docs/09-query-transformation.md) · [generation](docs/10-generation.md) · [evaluation](docs/11-rag-evaluation.md) · [HTTP service](docs/14-production-rag.md) · [experiment tracking](docs/15-experiment-tracking.md) · [architecture](docs/architecture.md)
+Topic documents: [RAG fundamentals](docs/01-rag-fundamentals.md) · [ingestion](docs/02-document-ingestion.md) · [parsing](docs/03-document-parsing.md) · [chunking](docs/04-chunking.md) · [embeddings](docs/05-embeddings.md) · [vector database](docs/06-vector-database.md) · [reranking](docs/08-reranking.md) · [query transformation](docs/09-query-transformation.md) · [generation](docs/10-generation.md) · [evaluation](docs/11-rag-evaluation.md) · [HTTP service](docs/14-production-rag.md) · [backend-for-frontend and streaming](docs/16-backend-for-frontend.md) · [experiment tracking](docs/15-experiment-tracking.md) · [architecture](docs/architecture.md)
 
 ## Known limitations
 
@@ -157,14 +161,13 @@ Topic documents: [RAG fundamentals](docs/01-rag-fundamentals.md) · [ingestion](
 
 ## Roadmap
 
-1. Node.js backend-for-frontend (TypeScript): streaming, rate limiting, authentication stub, request-ID propagation
-2. React user app and React ops dashboard
+1. React user app (streamed answers with sources and citations) and React ops dashboard
 3. Agent workflow with tool schemas, timeouts, step limits and human approval for side-effecting actions
 4. Docker Compose, GitHub Actions CI (running the generation gates and logging runs), AWS deployment and an operations runbook
 
 ## Contributing
 
-Run `pytest -q` and `python scripts/evaluate.py` before and after any change to chunking, embedding or retrieval, and `python scripts/evaluate_generation.py` before and after any change to the prompt or answer handling; report the metric change. Tests must run offline; model SDKs are optional extras imported lazily, and tests use the fakes in `tests/fakes.py`. Only redistributable documents belong in `data/raw/`.
+Run `pytest -q` and `python scripts/evaluate.py` before and after any change to chunking, embedding or retrieval, and `python scripts/evaluate_generation.py` before and after any change to the prompt or answer handling; report the metric change. Tests must run offline; model SDKs are optional extras imported lazily, and tests use the fakes in `tests/fakes.py`. For the BFF, run `npm test` and `npm run typecheck` in `bff/`. Only redistributable documents belong in `data/raw/`.
 
 ## License
 
