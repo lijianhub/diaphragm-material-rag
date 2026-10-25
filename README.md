@@ -32,7 +32,8 @@ The goal is a small but complete AI service that is **evaluated, tested and expl
 | Agent benchmark: 28 frozen cases (answer, lookup, action, no action, unanswerable, injection, rejection), simulated reviewer, safety and quality gates | ✅ Implemented, tested, measured with OpenAI | All 9 gates pass with `gpt-5.4-mini@low` (27/28; the miss is an evaluator false negative); 28 cases is small; see [docs/11](docs/11-rag-evaluation.md#agent-evaluation) |
 | Docker Compose (API, BFF, nginx + React; health-checked start-up, only the web port published) and an end-to-end smoke test | ✅ Implemented, run locally | Proxy and rate-limit hole found and fixed by testing the running stack; see [docs/19](docs/19-containers-and-ci.md) |
 | GitHub Actions CI: Python 3.10/3.12, BFF, web, retrieval regression gate, Compose smoke test; LLM gates on manual runs | ✅ Implemented | The LLM gates need the `OPENAI_API_KEY` repository secret |
-| AWS deployment, alerts, operations runbook | 🔜 Planned | |
+| AWS deployment, alerts, operations runbook, rollback, failure drills | 🔜 Planned: designed, not deployed | Resources, cost estimate (≈ $70–85/month 24/7), alarms and runbook in [docs/20](docs/20-aws-deployment.md) |
+| Sign-in (Cognito), roles, document-level access control, audit log | 🔜 Planned: designed, not implemented | Leak tests to be frozen first; see [docs/21](docs/21-enterprise-features.md) |
 
 ## Architecture
 
@@ -166,7 +167,7 @@ docs/            one document per topic (fundamentals, ingestion, parsing, chunk
 tests/           unit tests, fakes for model SDKs, in-code builders for PDF/DOCX/XLSX
 ```
 
-Topic documents: [RAG fundamentals](docs/01-rag-fundamentals.md) · [agentic RAG](docs/13-agentic-rag.md) · [ingestion](docs/02-document-ingestion.md) · [parsing](docs/03-document-parsing.md) · [chunking](docs/04-chunking.md) · [embeddings](docs/05-embeddings.md) · [vector database](docs/06-vector-database.md) · [reranking](docs/08-reranking.md) · [query transformation](docs/09-query-transformation.md) · [generation](docs/10-generation.md) · [evaluation](docs/11-rag-evaluation.md) · [HTTP service](docs/14-production-rag.md) · [backend-for-frontend and streaming](docs/16-backend-for-frontend.md) · [web app](docs/17-web-app.md) · [ops dashboard](docs/18-ops-dashboard.md) · [containers and CI](docs/19-containers-and-ci.md) · [experiment tracking](docs/15-experiment-tracking.md) · [architecture](docs/architecture.md)
+Topic documents: [RAG fundamentals](docs/01-rag-fundamentals.md) · [agentic RAG](docs/13-agentic-rag.md) · [ingestion](docs/02-document-ingestion.md) · [parsing](docs/03-document-parsing.md) · [chunking](docs/04-chunking.md) · [embeddings](docs/05-embeddings.md) · [vector database](docs/06-vector-database.md) · [reranking](docs/08-reranking.md) · [query transformation](docs/09-query-transformation.md) · [generation](docs/10-generation.md) · [evaluation](docs/11-rag-evaluation.md) · [HTTP service](docs/14-production-rag.md) · [backend-for-frontend and streaming](docs/16-backend-for-frontend.md) · [web app](docs/17-web-app.md) · [ops dashboard](docs/18-ops-dashboard.md) · [containers and CI](docs/19-containers-and-ci.md) · [AWS deployment (design)](docs/20-aws-deployment.md) · [enterprise features (design)](docs/21-enterprise-features.md) · [experiment tracking](docs/15-experiment-tracking.md) · [architecture](docs/architecture.md)
 
 ## Known limitations
 
@@ -180,7 +181,8 @@ Topic documents: [RAG fundamentals](docs/01-rag-fundamentals.md) · [agentic RAG
 
 ## Roadmap
 
-1. AWS deployment (images in a registry, managed services, secrets), alerts, an operations runbook, rollback and failure drills
+1. AWS deployment (images in a registry, managed services, secrets), alerts, an operations runbook, rollback and failure drills ([design](docs/20-aws-deployment.md))
+2. Sign-in, roles, document-level access control and an audit log ([design](docs/21-enterprise-features.md))
 
 ## Contributing
 
