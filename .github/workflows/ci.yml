@@ -1,0 +1,116 @@
+# Continuous integration: every push and pull request runs the offline checks (no API keys,
+# no tokens). The LLM gates cost tokens, so they run only when started by hand
+# (Actions → CI → Run workflow) and only if the OPENAI_API_KEY secret is set.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      llm:
+        description: "Run the LLM gates with this model (empty = offline checks only)"
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]  # the oldest supported version and the one in the image
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -e ".[api]"
+      - run: pytest -q
+      - name: Retrieval regression gate (offline, deterministic)
+        if: matrix.python == '3.12'
+        run: python scripts/evaluate.py --k 3 --min-hit 0.95 --output /tmp/retrieval.jsonl
+      - name: Generation and agent benchmarks run (offline harness; gates need an LLM)
+        if: matrix.python == '3.12'
+        run: |
+          python scripts/evaluate_generation.py --show none --output /tmp/generation.jsonl
+          python scripts/evaluate_agent.py --show none --output /tmp/agent.jsonl
+
+  bff:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bff
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: bff/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  compose:
+    needs: [python, bff, web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start the stack (offline answers)
+        run: docker compose up -d --build --wait --wait-timeout 180
+      - name: Smoke test through nginx
+        run: python3 scripts/smoke.py --base-url http://localhost:8080
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop
+        if: always()
+        run: docker compose down -v
+
+  llm-gates:
+    if: github.event_name == 'workflow_dispatch' && inputs.llm != ''
+    needs: [python]
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      RAG_LLM: ${{ inputs.llm }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[api,llm]"
+      - name: Check the key and the model with one ping
+        run: python scripts/check_llm.py --ping
+      - name: Generation gates
+        run: python scripts/evaluate_generation.py --llm "$RAG_LLM" --gate --show failures
+      - name: Agent gates
+        run: python scripts/evaluate_agent.py --llm "$RAG_LLM" --gate --show failures

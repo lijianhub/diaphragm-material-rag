@@ -17,6 +17,10 @@ export interface Config {
   upstreamTimeoutMs: number;
   /** Time allowed for an agent run or an approval (several model turns and tools). */
   agentTimeoutMs: number;
+  /** Number of reverse proxies in front (nginx in Docker Compose: 1). The client IP is taken
+   *  from X-Forwarded-For that many hops back, i.e. the address the last trusted proxy added,
+   *  never what the client wrote first. 0 (default): ignore X-Forwarded-For. */
+  trustProxyHops: number;
   logLevel: string;
 }
 
@@ -38,6 +42,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     corsOrigins: env.BFF_CORS_ORIGINS === undefined ? ["http://localhost:5173"] : list(env.BFF_CORS_ORIGINS),
     upstreamTimeoutMs: Number(env.BFF_UPSTREAM_TIMEOUT_MS ?? 60_000),
     agentTimeoutMs: Number(env.BFF_AGENT_TIMEOUT_MS ?? 180_000),
+    trustProxyHops: Number(env.BFF_TRUST_PROXY_HOPS ?? 0),
     logLevel: env.BFF_LOG_LEVEL ?? "info",
   };
 }

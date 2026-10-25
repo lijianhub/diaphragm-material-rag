@@ -1,0 +1,31 @@
+# Never in an image: secrets, private documents, local state.
+.env
+.env.*
+!.env.example
+data/raw/*.pdf
+data/index
+logs
+runs
+mlflow.db
+mlartifacts
+mlruns
+.cache
+
+# Not needed to build or run.
+.git
+.github
+.claude
+.vscode
+.idea
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.venv
+venv
+notebooks
+experiments
+tests
+docs
+evaluation

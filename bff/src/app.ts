@@ -103,6 +103,12 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
     // caller's header as-is and skip genReqId, bypassing the check below (a test caught it).
     requestIdHeader: false,
     requestIdLogLabel: "request_id",
+    // Behind nginx every request comes from the proxy's address; without this, the per-IP
+    // rate limit would be one shared limit for all users. A hop count, not `true`: trusting
+    // every hop takes the leftmost X-Forwarded-For entry, which the client controls.
+    // Hop 0 is the socket peer (nginx); trusting hops < N means the client IP is the
+    // X-Forwarded-For entry N hops back, the one the trusted proxy wrote.
+    trustProxy: config.trustProxyHops > 0 ? (_address: string, hop: number) => hop < config.trustProxyHops : false,
     // Accept the caller's ID only if it is short and plain (no log injection); else make one.
     genReqId: (req) => {
       const given = req.headers["x-request-id"];

@@ -63,6 +63,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=REPO_ROOT / "evaluation" / "results.jsonl")
     parser.add_argument("--track", choices=TRACKER_KINDS, default="none", help="record the run: jsonl (runs/runs.jsonl) or mlflow")
     parser.add_argument("--run-name", default=None, help="name of the tracked run (default: a summary of the configuration)")
+    parser.add_argument("--min-hit", type=float, default=None, help="regression gate: exit 1 if hit@k falls below this (CI uses the recorded baseline)")
     args = parser.parse_args()
 
     # Only the tracked sample files (txt, md, html, csv), so scores are reproducible on every clone.
@@ -138,6 +139,11 @@ def main() -> None:
         if run_id:
             dirty = " (working tree has uncommitted changes)" if tags["git_dirty"] == "true" else ""
             print(f"tracked run {run_id} with {args.track}{dirty}")
+    if args.min_hit is not None:
+        passed = report.hit_rate >= args.min_hit
+        print(f"{'PASS' if passed else 'FAIL'}  hit@{report.k}={report.hit_rate:.3f} (minimum {args.min_hit})")
+        if not passed:
+            sys.exit(1)
 
 
 if __name__ == "__main__":

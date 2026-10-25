@@ -13,6 +13,7 @@ license = { text = "MIT" }
 keywords = ["rag", "retrieval", "embeddings", "vector-search", "python"]
 dependencies = [
     "pytest>=8.0.0",
+    "pypdf>=4.0.0",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +26,9 @@ api = ["fastapi>=0.110", "uvicorn>=0.29"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+# Only tests/: a script named *_test.py elsewhere was collected and put scripts/ on sys.path,
+# so `import agent` resolved to scripts/agent.py instead of the package in src/.
+testpaths = ["tests"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

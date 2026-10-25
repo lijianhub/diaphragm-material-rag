@@ -95,4 +95,4 @@ The user app ([17-web-app.md](17-web-app.md)) and the ops dashboard ([18-ops-das
 
 ## Deployment Target
 
-The project will run as an enterprise trial on AWS: documents in S3, vectors in a managed store (OpenSearch or pgvector) behind the `VectorStore` interface, embeddings and reranking through Bedrock, services in containers. Configuration comes from environment variables and secrets from a secrets manager, never from code or images.
+Locally, `docker compose up` runs the API, the BFF and nginx with the React app, with only nginx published ([19-containers-and-ci.md](19-containers-and-ci.md)); CI builds the same images and smoke-tests them. The project will run as an enterprise trial on AWS: documents in S3, vectors in a managed store (OpenSearch or pgvector) behind the `VectorStore` interface, embeddings and reranking through Bedrock, services in containers. Configuration comes from environment variables and secrets from a secrets manager, never from code or images.

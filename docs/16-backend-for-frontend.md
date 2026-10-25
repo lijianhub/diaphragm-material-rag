@@ -23,6 +23,7 @@ npm run typecheck && npm run build && npm start  # production build in bff/dist
 | `RAG_API_URL` | `http://127.0.0.1:8000` | the Python API |
 | `BFF_HOST`, `BFF_PORT` | `127.0.0.1`, `3000` | where the BFF listens |
 | `BFF_API_KEYS` | empty | comma-separated Bearer keys; **empty turns authentication off** (local development only; a warning is logged) |
+| `BFF_TRUST_PROXY_HOPS` | `0` | reverse proxies in front (Compose: 1). The client IP is the `X-Forwarded-For` entry the last trusted proxy wrote; 0 ignores the header. Never `trustProxy: true`: it takes the leftmost entry, which the client controls ([19-containers-and-ci.md](19-containers-and-ci.md)) |
 | `BFF_AGENT_TIMEOUT_MS` | `180000` | for agent runs and approvals, which take several model turns |
 | `BFF_ADMIN_KEYS` | empty | Bearer keys for `/api/ops/*`; a user key gets 403. With user keys but no admin keys, the ops routes are closed |
 | `BFF_RATE_LIMIT_MAX`, `BFF_RATE_LIMIT_WINDOW` | `30`, `1 minute` | per client, on the `/api/ask` routes |

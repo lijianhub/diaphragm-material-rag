@@ -385,3 +385,37 @@ describe("agent routes", () => {
     expect(bad.statusCode).toBe(400);
   });
 });
+
+describe("behind a reverse proxy", () => {
+  const fromClient = (ip: string) =>
+    app.inject({ method: "POST", url: "/api/ask", payload: { question: "q" }, headers: { "x-forwarded-for": ip } });
+
+  it("rate-limits each client separately when the proxy is trusted", async () => {
+    await app.close();
+    app = await buildApp(config({ trustProxyHops: 1, rateLimitMax: 1 }));
+
+    const statuses = [(await fromClient("10.0.0.1")).statusCode, (await fromClient("10.0.0.2")).statusCode, (await fromClient("10.0.0.1")).statusCode];
+
+    expect(statuses).toEqual([200, 200, 429]);
+  });
+
+  it("ignores X-Forwarded-For when no proxy is trusted, so clients cannot dodge the limit", async () => {
+    await app.close();
+    app = await buildApp(config({ rateLimitMax: 1 }));
+
+    const statuses = [(await fromClient("10.0.0.1")).statusCode, (await fromClient("10.0.0.2")).statusCode];
+
+    expect(statuses).toEqual([200, 429]);
+  });
+
+  it("uses the address the proxy added, so a client-written first entry cannot dodge the limit", async () => {
+    await app.close();
+    app = await buildApp(config({ trustProxyHops: 1, rateLimitMax: 1 }));
+    // A client sends its own X-Forwarded-For; a proxy that appends would produce "fake, real".
+    const spoofed = (fake: string) => fromClient(`${fake}, 10.0.0.7`);
+
+    const statuses = [(await spoofed("203.0.113.1")).statusCode, (await spoofed("203.0.113.2")).statusCode];
+
+    expect(statuses).toEqual([200, 429]); // both counted as 10.0.0.7
+  });
+});

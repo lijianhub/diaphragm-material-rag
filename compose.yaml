@@ -1,0 +1,53 @@
+# The whole system on one machine:  docker compose up --build   → http://localhost:8080 (ops: /ops)
+#
+# Only the web container is published. The API and the BFF are reachable inside the Compose
+# network only, so the browser must go through nginx → BFF (rate limits, keys) → API.
+#
+# Configuration comes from the shell or the git-ignored .env (Compose reads it for the ${...}
+# below). RAG_LLM empty means offline extractive answers and the rule-based agent planner.
+# Keys are passed to the containers at run time and never built into an image; note that
+# `docker compose config` prints them.
+name: diaphragm-rag
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    environment:
+      RAG_LLM: ${RAG_LLM:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - api-logs:/app/logs  # feedback, agent runs, filed reports survive a restart
+    restart: unless-stopped
+
+  bff:
+    build:
+      context: .
+      dockerfile: docker/bff.Dockerfile
+    environment:
+      RAG_API_URL: http://api:8000
+      BFF_API_KEYS: ${BFF_API_KEYS:-}
+      BFF_ADMIN_KEYS: ${BFF_ADMIN_KEYS:-}
+      BFF_RATE_LIMIT_MAX: ${BFF_RATE_LIMIT_MAX:-30}
+      BFF_TRUST_PROXY_HOPS: "1"  # nginx in front: rate-limit by the client's address, not nginx's
+      BFF_CORS_ORIGINS: ""  # same origin through nginx: no cross-origin access needed
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    depends_on:
+      bff:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  api-logs:
