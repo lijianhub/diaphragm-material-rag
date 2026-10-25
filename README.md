@@ -56,7 +56,7 @@ Every stage sits behind a small interface (vector store, embedder, reranker, LLM
 ```bash
 python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-pytest -q                                              # ~240 tests, offline, about a second
+pytest -q                                              # ~300 tests, offline, a few seconds (API tests need: pip install -e ".[api,test]")
 
 python scripts/index.py                                # build data/index from data/raw (incremental on re-runs)
 python scripts/query.py "How do toolmakers deal with springback?"

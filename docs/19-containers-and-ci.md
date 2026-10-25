@@ -69,6 +69,17 @@ A BFF test pins each case, including a spoofed first entry. A number for `trustP
 
 The smoke test was first named `scripts/smoke_test.py`. It matches pytest's default `*_test.py` pattern, so pytest collected it and, in its default import mode, put `scripts/` on `sys.path`: `import agent` and `import query` then resolved to `scripts/agent.py` and `scripts/query.py`, and two test files failed to import. `testpaths = ["tests"]` in `pyproject.toml` keeps pytest out of `scripts/`, and the script is now `scripts/smoke.py`. It was caught by running the full suite before committing, which is also what CI does on every push.
 
+## The first CI run failed, and why that was useful
+
+The first push failed `pytest` on both Python versions, while everything passed locally. GitHub serves job logs only to signed-in users, so the run was **reproduced locally**: `git archive HEAD` (exactly what CI checks out: no private PDF, no local index, no `.env`) piped into a clean `python:3.10-slim` container. That found two problems the developer machine hid:
+
+| Problem | Why it was invisible locally | Fix |
+|---|---|---|
+| Starlette's `TestClient` needs `httpx2`, and the real-server test uses `httpx`; neither was declared | both were installed globally on the laptop | a `test` extra: `pip install -e ".[api,test]"` |
+| After `pip install -e .`, `python scripts/evaluate.py` imported `scripts/query.py` as `query` | the laptop has no editable install, so the scripts' "add `src/` if missing" put it first; with an editable install `src/` is already on the path (at the end), and the script's own folder wins | every script and experiment always inserts `src/` first |
+
+Both would have hit anyone following the README's `pip install -e .`. A clean container per Python version (with `git` installed, as CI has) then passed every CI step before the second push.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every push and pull request:

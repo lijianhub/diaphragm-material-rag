@@ -10,6 +10,7 @@ An open-source (MIT), educational RAG project for materials-engineering knowledg
 
 ```bash
 pip install -r requirements.txt               # pytest + pypdf; the only runtime deps today
+pip install -e ".[api,test]"                   # what CI installs: the API extra and the HTTP clients the API tests need
 pytest -q                                     # full suite
 pytest tests/test_chunking.py -q              # one file
 pytest tests/test_chunking.py::test_name -q   # one test
@@ -44,7 +45,7 @@ from ingestion.loader import load_documents   # correct
 from src.ingestion.loader import ...          # wrong
 ```
 
-Code run outside pytest must add `src/` to the import path itself. Scripts and experiments insert `REPO_ROOT / "src"` into `sys.path` (see `experiments/01_naive_rag/run.py`); for ad-hoc scripts, use `PYTHONPATH=src` or `pip install -e .`.
+Code run outside pytest must add `src/` to the import path itself. Scripts and experiments always insert `REPO_ROOT / "src"` at the front of `sys.path` (see `experiments/01_naive_rag/run.py`), unconditionally: after `pip install -e .` `src/` is already on the path but last, and the script's own folder would win (`scripts/query.py` shadowing the `query` package). pytest only collects `tests/` (`testpaths`); for ad-hoc scripts, use `PYTHONPATH=src` or `pip install -e .`.
 
 ## Architecture
 

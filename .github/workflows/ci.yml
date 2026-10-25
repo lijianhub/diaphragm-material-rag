@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-      - run: pip install -e ".[api]"
+      - run: pip install -e ".[api,test]"
       - run: pytest -q
       - name: Retrieval regression gate (offline, deterministic)
         if: matrix.python == '3.12'
