@@ -35,7 +35,7 @@ curl -s localhost:8000/metrics
 | `GET /ops/approvals`, `POST /ops/approvals/{id}` | the approval queue; `{decision: approve\|reject, reviewer, reason}` resumes the run | 200; 404; 409 already decided; 422 |
 | `GET /ops/summary`, `/ops/feedback`, `/ops/evaluations`, `/ops/ingestion`, `/ops/agent-runs` | read-only JSON for the ops dashboard (metrics with estimated percentiles, recent feedback, tracked runs, last ingestion report); internal, behind the BFF's admin key; see [18-ops-dashboard.md](18-ops-dashboard.md) | 200; 422 invalid `limit` |
 
-Request body: `question` (1–2,000 characters, not blank) and `top_k` (1–10, default 3), validated by Pydantic. Errors have one shape: `{"request_id", "error", "detail"}`.
+Request body: `question` (1–2,000 characters, not blank), `top_k` (1–10, default 3) and an optional `filter` on chunk metadata, e.g. `{"doc_type": ["md", "pdf"]}` (fields `source`, `doc_type`, `title`, `heading`, `page`, `sheet`; 1–20 values of at most 200 characters each; an unknown field is a 422), validated by Pydantic. The filter acts **inside** retrieval (see `SearchIndex.search`), so the `top_k` slots are filled with matching chunks; only the filter's field names are logged, never its values. Errors have one shape: `{"request_id", "error", "detail"}`.
 
 Liveness and readiness are separate on purpose: an orchestrator restarts a process that fails liveness, but only stops sending traffic to one that is not ready. A missing index is a readiness problem, not a reason to restart.
 

@@ -550,3 +550,30 @@ def test_agent_endpoints_need_an_index_and_never_create_files_otherwise(tmp_path
     assert client.post("/agent/runs", json={"question": "q"}).status_code == 503
     assert client.get("/ops/approvals").json() == {"pending": []}
     assert list(tmp_path.iterdir()) == []
+
+
+# ---- metadata filter -------------------------------------------------------------------
+
+
+def test_ask_filter_restricts_the_sources_in_json_and_stream(caplog):
+    client = _client()
+    body = {"question": "Why was lot L-302 rejected for tearing?", "filter": {"source": "forming.txt"}}
+
+    with caplog.at_level(logging.INFO, logger="rag.api"):
+        answer = client.post("/ask", json=body).json()
+    stream = client.post("/ask/stream", json=body).text
+    log = [json.loads(r.getMessage()) for r in caplog.records if r.name == "rag.api"][-1]
+
+    assert [s["source"] for s in answer["sources"]] == ["forming.txt"]  # lots.txt matches the question best, but is filtered out
+    assert "lots.txt" not in stream and "forming.txt" in stream
+    assert log["filter_fields"] == ["source"] and "forming.txt" not in json.dumps(log)  # field names only
+
+
+@pytest.mark.parametrize(
+    "bad_filter",
+    [{"owner": "quality"}, {"source": []}, {"source": ["x"] * 21}, {"source": "x" * 201}, {"source": {"nested": 1}}],
+)
+def test_ask_rejects_unknown_or_unbounded_filters(bad_filter):
+    response = _client().post("/ask", json={"question": "q", "filter": bad_filter})
+
+    assert response.status_code == 422 and response.json()["error"] == "invalid_request"

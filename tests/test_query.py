@@ -151,9 +151,9 @@ def test_prf_expansion_runs_a_second_search_with_added_terms(monkeypatch):
     searched = []
     original_search = index.search
 
-    def recording_search(query, top_k=3, alpha=None, rerank=True):
+    def recording_search(query, top_k=3, alpha=None, rerank=True, filter=None):
         searched.append((query, top_k, rerank))
-        return original_search(query, top_k=top_k, alpha=alpha, rerank=rerank)
+        return original_search(query, top_k=top_k, alpha=alpha, rerank=rerank, filter=filter)
 
     monkeypatch.setattr(index, "search", recording_search)
     results = retrieve(index, "How is springback handled?", top_k=1, prf_terms=3, prf_docs=2)
@@ -183,3 +183,23 @@ def test_retrieve_rejects_unknown_fusion():
 
     with pytest.raises(ValueError):
         retrieve(index, "a, and what b?", transforms=[decompose], fusion="max")
+
+
+def test_retrieve_passes_the_filter_to_every_search(monkeypatch):
+    index = SearchIndex()
+    index.sync([Document(source="a.md", content="Springback is compensated by over-forming.", metadata={"doc_type": "md"}),
+                Document(source="b.txt", content="Springback compensation uses over-formed dies.", metadata={"doc_type": "txt"})])
+    filters = []
+    original_search = index.search
+
+    def recording_search(query, top_k=3, alpha=None, rerank=True, filter=None):
+        filters.append(filter)
+        return original_search(query, top_k=top_k, alpha=alpha, rerank=rerank, filter=filter)
+
+    monkeypatch.setattr(index, "search", recording_search)
+
+    results = retrieve(index, "How is springback compensated, and what dies are used?", transforms=[decompose], prf_terms=2,
+                       filter={"doc_type": "md"})
+
+    assert len(filters) > 2 and all(f == {"doc_type": "md"} for f in filters)  # feedback, sub-queries, every one
+    assert {r.source for r in results} == {"a.md"}

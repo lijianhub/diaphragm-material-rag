@@ -19,6 +19,18 @@ import type { Config } from "./config.js";
 
 const REQUEST_ID = /^[A-Za-z0-9._:-]{1,64}$/;
 
+// integer first: Fastify coerces types, and with string first the number 2 became "2".
+const filterValue = { anyOf: [{ type: "integer" }, { type: "string", maxLength: 200 }] } as const;
+
+// The same rules as the API: known metadata fields only, 1 to 20 short values each.
+// Without this property the field would be stripped silently (Fastify's removeAdditional).
+const filterSchema = {
+  type: "object",
+  minProperties: 1,
+  propertyNames: { enum: ["source", "doc_type", "title", "heading", "page", "sheet"] },
+  additionalProperties: { anyOf: [filterValue, { type: "array", minItems: 1, maxItems: 20, items: filterValue }] },
+} as const;
+
 const askSchema = {
   type: "object",
   required: ["question"],
@@ -26,6 +38,7 @@ const askSchema = {
   properties: {
     question: { type: "string", minLength: 1, maxLength: 2000, pattern: "\\S" },
     top_k: { type: "integer", minimum: 1, maximum: 10 },
+    filter: filterSchema,
   },
 } as const;
 
@@ -79,6 +92,7 @@ interface FeedbackBody {
 interface AskBody {
   question: string;
   top_k?: number;
+  filter?: Record<string, string | number | (string | number)[]>;
 }
 
 function sameSecret(given: string, expected: string): boolean {

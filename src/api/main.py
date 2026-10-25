@@ -187,6 +187,7 @@ def _question_log(body) -> dict:
         question_chars=len(body.question),
         question_sha256=hashlib.sha256(body.question.encode("utf-8")).hexdigest()[:12],
         top_k=body.top_k,
+        filter_fields=sorted(body.filter) if body.filter else None,  # field names only, never the values
     )
 
 
@@ -285,7 +286,7 @@ def create_app(settings: Optional[Settings] = None, *, index=None, llm=None, met
         if app.state.index is None:
             return _error(request_id, 503, "not_ready", app.state.not_ready)
 
-        answer = RAGPipeline(app.state.index, complete=app.state.llm, top_k=body.top_k).answer(body.question)
+        answer = RAGPipeline(app.state.index, complete=app.state.llm, top_k=body.top_k, filter=body.filter).answer(body.question)
         metrics.record_answer(answer)
         request.state.log.update(_answer_log(answer))
         return _answer_response(request_id, answer)
@@ -299,7 +300,7 @@ def create_app(settings: Optional[Settings] = None, *, index=None, llm=None, met
         request.state.log.update(stream=True, **_question_log(body))
         if app.state.index is None:
             return _error(request_id, 503, "not_ready", app.state.not_ready)
-        pipeline = RAGPipeline(app.state.index, complete=app.state.llm, top_k=body.top_k)
+        pipeline = RAGPipeline(app.state.index, complete=app.state.llm, top_k=body.top_k, filter=body.filter)
         question_fields = _question_log(body)
 
         def events():

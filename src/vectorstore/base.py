@@ -5,7 +5,7 @@ import math
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import AbstractSet, Any, Dict, List, Optional, Sequence, Union
 
 PathLike = Union[str, Path]
 STORE_META_FILE = "store.json"
@@ -87,7 +87,10 @@ class VectorStore(ABC):
         """Remove every chunk of ``doc_id``; return how many were removed."""
 
     @abstractmethod
-    def search(self, query_vector: Sequence[float], top_k: int) -> List[VectorHit]: ...
+    def search(self, query_vector: Sequence[float], top_k: int, allowed_ids: Optional[AbstractSet[str]] = None) -> List[VectorHit]:
+        """The ``top_k`` nearest chunks. With ``allowed_ids``, only those chunks are
+        candidates: the filter is applied inside the search, so a non-matching chunk can
+        never take a slot that an allowed one would have filled."""
 
     @abstractmethod
     def _save_vectors(self, directory: Path) -> None: ...

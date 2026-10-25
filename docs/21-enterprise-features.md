@@ -29,7 +29,7 @@
 
 ## 2. Document-level access control: what each person may see
 
-**Today:** every chunk is searchable by everyone.
+**Today:** every chunk is searchable by everyone. The mechanism this design needs already exists: `SearchIndex.search(filter=…)` restricts retrieval to chunks whose metadata match, inside the search (vector stores take `allowed_ids`; FAISS uses an ID selector), and an unknown field matches nothing. Permissions add an access label to each chunk and a filter derived from the user's groups, **set by the server, never by the request**.
 
 **Design:**
 

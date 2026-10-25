@@ -419,3 +419,25 @@ describe("behind a reverse proxy", () => {
     expect(statuses).toEqual([200, 429]); // both counted as 10.0.0.7
   });
 });
+
+describe("metadata filter", () => {
+  it("forwards a valid filter to the API", async () => {
+    const response = await ask({ question: "q", filter: { doc_type: ["md", "pdf"], page: 2 } });
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(upstream.requests[0]!.body)).toEqual({ question: "q", filter: { doc_type: ["md", "pdf"], page: 2 } });
+  });
+
+  it.each([
+    [{ owner: "quality" }],
+    [{ source: [] }],
+    [{ source: Array(21).fill("x") }],
+    [{ source: "x".repeat(201) }],
+    [{}],
+  ])("rejects filter %j with 400 before calling the API", async (filter) => {
+    const response = await ask({ question: "q", filter });
+
+    expect(response.statusCode).toBe(400);
+    expect(upstream.requests).toHaveLength(0);
+  });
+});

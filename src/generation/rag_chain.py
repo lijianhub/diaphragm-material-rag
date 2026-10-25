@@ -84,20 +84,25 @@ class RAGPipeline:
         top_k: int = 3,
         max_context_tokens: int = 3000,
         retrieve_fn: Optional[Callable] = None,
+        filter: Optional[dict] = None,
     ):
+        """``filter`` restricts retrieval to chunks with matching metadata (see
+        ``retrieval.index.matches_filter``); it is passed to every search."""
         self.index = index
         self.complete = complete
         self.top_k = top_k
         self.max_context_tokens = max_context_tokens
         self.retrieve_fn = retrieve_fn
+        self.filter = filter
         self.extractive = ExtractiveAnswerer()
 
     def _retrieve(self, question: str) -> list:
         if self.index is None:
             return []
         if self.retrieve_fn is not None:
-            return list(self.retrieve_fn(self.index, question, top_k=self.top_k))
-        return self.index.search(question, top_k=self.top_k)
+            extra = {"filter": self.filter} if self.filter is not None else {}
+            return list(self.retrieve_fn(self.index, question, top_k=self.top_k, **extra))
+        return self.index.search(question, top_k=self.top_k, filter=self.filter)
 
     def _results(self, question: str, documents: Optional[Sequence[str]]) -> list:
         if documents is not None:

@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import Callable, Dict, Hashable, List, Sequence
+from typing import Any, Callable, Dict, Hashable, List, Mapping, Optional, Sequence
 
 from retrieval.fusion import reciprocal_rank_fusion
 from retrieval.index import SearchIndex, SearchResult
@@ -51,6 +51,7 @@ def retrieve(
     prf_docs: int = 3,
     fusion: str = "rrf",
     fusion_k: int = 60,
+    filter: Optional[Mapping[str, Any]] = None,
 ) -> List[SearchResult]:
     """Search with transformed queries.
 
@@ -75,7 +76,7 @@ def retrieve(
     if prf_terms:
         with_feedback = []
         for query in queries:
-            feedback = index.search(query, top_k=prf_docs, rerank=False)
+            feedback = index.search(query, top_k=prf_docs, rerank=False, filter=filter)
             terms = expansion_terms(query, [r.text for r in feedback], index.term_idf, prf_terms)
             with_feedback.append(f"{query} {' '.join(terms)}" if terms else query)
         queries = list(dict.fromkeys(with_feedback))
@@ -83,11 +84,11 @@ def retrieve(
     rerank = index.reranker is not None
     if len(queries) == 1:
         if not rerank:
-            return index.search(queries[0], top_k=top_k)
-        candidates = index.search(queries[0], top_k=index.rerank_depth, rerank=False)
+            return index.search(queries[0], top_k=top_k, filter=filter)
+        candidates = index.search(queries[0], top_k=index.rerank_depth, rerank=False, filter=filter)
     else:
         pool = index.rerank_depth if rerank else max(top_k, 10)
-        rankings = [index.search(query, top_k=pool, rerank=False) for query in queries]
+        rankings = [index.search(query, top_k=pool, rerank=False, filter=filter) for query in queries]
         by_key: Dict[Hashable, SearchResult] = {}
         for ranking in rankings:
             for result in ranking:

@@ -11,6 +11,7 @@ The goal is a small but complete AI service that is **evaluated, tested and expl
 | Multi-format ingestion (PDF, DOCX, XLSX, HTML, Markdown, CSV, TXT) with page/sheet/section citations | ✅ Implemented and tested | Standard library parsers; fault-tolerant batch ingestion |
 | Paragraph-aware chunking with overlap | ✅ Implemented and tested | No gaps; overlap starts on word boundaries |
 | Hybrid retrieval: BM25 + dense vectors (weighted sum or RRF) | ✅ Implemented and tested | Light stemming; shared tokenizer |
+| Metadata filter (`doc_type`, `source`, `title`, `heading`, `page`, `sheet`) applied inside retrieval, through the API and the BFF | ✅ Implemented and tested | Fills top-k with matching chunks; the basis for document permissions ([docs/21](docs/21-enterprise-features.md)) |
 | Persistent vector store (in-memory, FAISS) with incremental sync | ✅ Implemented and tested | Content-hash sync; embedder recorded in the manifest |
 | Local embedding model (sentence-transformers) | ✅ Implemented, tested and benchmarked | Optional extra |
 | Cross-encoder reranking and duplicate-chunk collapsing | ✅ Implemented, tested and benchmarked | Optional extra; off by default |

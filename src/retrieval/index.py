@@ -4,7 +4,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Union
 
 from chunking import RecursiveChunker
 from embedding import SimpleEmbedder, create_embedder, query_vector
@@ -56,6 +56,25 @@ def content_hash(text: str) -> str:
 
 def _embedder_name(embedder) -> str:
     return getattr(embedder, "name", type(embedder).__name__)
+
+
+# Fields of the chunk record itself; anything else is looked up in its metadata.
+_RECORD_FIELDS = ("source", "doc_id")
+
+
+def matches_filter(record: ChunkRecord, filter: Mapping[str, Any]) -> bool:
+    """True if every field in ``filter`` matches: equal to the value, or to any of the
+    values when a list, tuple or set is given. Values compare as strings, so ``{"page": 2}``
+    matches page "2". A field the chunk does not have never matches: an unknown field
+    excludes rather than being ignored, which is the safe default for access control."""
+    for name, expected in filter.items():
+        value = getattr(record, name) if name in _RECORD_FIELDS else record.metadata.get(name)
+        if value is None:
+            return False
+        options = expected if isinstance(expected, (list, tuple, set, frozenset)) else [expected]
+        if str(value) not in {str(option) for option in options}:
+            return False
+    return True
 
 
 class SearchIndex:
@@ -275,22 +294,42 @@ class SearchIndex:
             self._bm25 = BM25([record.text for record in self._corpus()], stem_tokens=self.stem_tokens)
         return self._bm25.idf(term)
 
-    def search(self, query: str, top_k: int = 3, alpha: Optional[float] = None, rerank: bool = True) -> List[SearchResult]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 3,
+        alpha: Optional[float] = None,
+        rerank: bool = True,
+        filter: Optional[Mapping[str, Any]] = None,
+    ) -> List[SearchResult]:
         """Hybrid retrieval, then (if configured and ``rerank``) cross-encoder reranking.
 
         ``rerank=False`` returns the first-stage ranking, which multi-query retrieval
-        fuses before reranking once against the original question."""
+        fuses before reranking once against the original question.
+
+        ``filter`` restricts the search to chunks whose fields match, e.g.
+        ``{"doc_type": "md"}`` or ``{"source": ["a.txt", "b.pdf"]}`` (a list means any of
+        them); see ``matches_filter``. It acts inside retrieval: other chunks get no dense
+        or lexical score, so they take no rank in fusion and no top-k or rerank slot."""
         records = self._corpus()
         if not records:
             return []
         weight = self.alpha if alpha is None else alpha
         texts = [record.text for record in records]
         position = {record.id: i for i, record in enumerate(records)}
+        allowed = None if filter is None else {i for i, record in enumerate(records) if matches_filter(record, filter)}
+        if allowed is not None and not allowed:
+            return []
 
         dense = [0.0] * len(records)
-        for hit in self.store.search(query_vector(self.embedder, query), top_k=self.dense_candidates):
+        allowed_ids = None if allowed is None else {records[i].id for i in allowed}
+        for hit in self.store.search(query_vector(self.embedder, query), top_k=self.dense_candidates, allowed_ids=allowed_ids):
             dense[position[hit.id]] = hit.score
         lexical = self._lexical_scores(query, texts)
+        if allowed is not None:
+            # IDF stays corpus-wide (scores are comparable with and without a filter);
+            # chunks outside the filter simply score nothing.
+            lexical = [score if i in allowed else 0.0 for i, score in enumerate(lexical)]
 
         if self.fusion == "rrf":
             # Ranks only, so BM25 needs no normalization. alpha weights the two
@@ -308,7 +347,7 @@ class SearchIndex:
             scores = combine_scores(dense, lexical, weight)
 
         # Rank by position so duplicate chunk texts keep their own source and offsets.
-        order = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+        order = sorted(range(len(scores)) if allowed is None else sorted(allowed), key=lambda i: scores[i], reverse=True)
         use_reranker = self.reranker is not None and rerank
         needed = self.rerank_depth if use_reranker else top_k
         candidates = self._dedupe(order, records, needed) if self.dedupe_overlaps else order[:needed]

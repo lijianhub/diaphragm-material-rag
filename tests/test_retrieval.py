@@ -2,6 +2,7 @@ import pytest
 
 from embedding.embedder import SimpleEmbedder
 from ingestion.loader import Document
+from ingestion.parser import Section
 from retrieval.hybrid import hybrid_search
 from retrieval.index import SearchIndex
 
@@ -97,3 +98,58 @@ def test_search_index_rrf_prefers_chunks_both_retrievers_rank_well():
 def test_search_index_rejects_unknown_fusion():
     with pytest.raises(ValueError):
         SearchIndex(fusion="max")
+
+
+# ---- metadata filter -------------------------------------------------------------------
+
+FILTER_DOCS = [
+    Document(source="notes.txt", content="Springback is compensated by over-forming the die.", metadata={"doc_type": "txt"}),
+    Document(source="faq.md", content="Springback compensation: over-form the profile slightly.", metadata={"doc_type": "md"}),
+    Document(source="guide.md", content="Springback grows with strength; dies are over-formed.", metadata={"doc_type": "md"}),
+    # A page number comes from a section (as for a PDF page), not from document metadata.
+    Document(source="sheet.pdf", content="HAVAR holds pressure in pressure windows.", metadata={"doc_type": "pdf"},
+             sections=[Section(text="HAVAR holds pressure in pressure windows.", metadata={"page": 2})]),
+]
+
+
+def _filter_index(**kwargs):
+    index = SearchIndex(**kwargs)
+    index.sync(FILTER_DOCS)
+    return index
+
+
+@pytest.mark.parametrize("fusion", ["weighted", "rrf"])
+def test_filter_acts_inside_retrieval_so_top_k_is_filled_with_matching_chunks(fusion):
+    index = _filter_index(fusion=fusion)
+
+    unfiltered = index.search("springback over-forming", top_k=2)
+    filtered = index.search("springback over-forming", top_k=2, filter={"doc_type": "md"})
+
+    assert unfiltered[0].source == "notes.txt"  # the best match overall is excluded below
+    assert [r.source for r in filtered] == ["faq.md", "guide.md"] or [r.source for r in filtered] == ["guide.md", "faq.md"]
+    assert all(r.metadata["doc_type"] == "md" for r in filtered)
+
+
+def test_filter_values_lists_record_fields_and_strings():
+    index = _filter_index()
+
+    assert {r.source for r in index.search("springback", top_k=5, filter={"source": ["notes.txt", "sheet.pdf"]})} <= {"notes.txt", "sheet.pdf"}
+    assert [r.source for r in index.search("HAVAR pressure", top_k=5, filter={"page": "2"})] == ["sheet.pdf"]
+    assert [r.source for r in index.search("HAVAR pressure", top_k=5, filter={"page": 2})] == ["sheet.pdf"]  # compared as strings
+    assert index.search("springback", top_k=5, filter={"doc_type": "docx"}) == []
+    assert index.search("springback", top_k=5, filter={"owner": "quality"}) == []  # unknown field: excluded, not ignored
+    assert index.search("springback", top_k=5, filter={}) == index.search("springback", top_k=5)  # empty filter: everything
+
+
+def test_filter_applies_before_reranking():
+    from tests.fakes import FakeCrossEncoder
+    from reranking import CrossEncoderReranker
+
+    # The fake reranker loves the excluded document; it must never even see it.
+    model = FakeCrossEncoder(preferred="over-forming the die")
+    index = _filter_index(reranker=CrossEncoderReranker(model=model))
+
+    results = index.search("springback", top_k=2, filter={"doc_type": "md"})
+
+    assert {r.source for r in results} <= {"faq.md", "guide.md"}
+    assert all("over-forming the die" not in passage for batch in model.calls for _, passage in batch)

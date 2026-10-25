@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import AbstractSet, Dict, List, Optional, Sequence
 
 from .base import ChunkRecord, VectorHit, VectorStore, l2_normalize
 
@@ -70,12 +70,22 @@ class FaissVectorStore(VectorStore):
                 del self._str_ids[int_id]
         return len(doomed)
 
-    def search(self, query_vector: Sequence[float], top_k: int) -> List[VectorHit]:
+    def search(self, query_vector: Sequence[float], top_k: int, allowed_ids: Optional[AbstractSet[str]] = None) -> List[VectorHit]:
         if not self._records:
             return []
         self._check_dim(query_vector)
-        k = min(top_k, len(self._records))
-        scores, ids = self._index.search(self._matrix([query_vector]), k)
+        if allowed_ids is None:
+            k = min(top_k, len(self._records))
+            scores, ids = self._index.search(self._matrix([query_vector]), k)
+        else:
+            # An ID selector restricts the search itself, so FAISS returns the top_k
+            # among the allowed vectors (not the top_k overall, filtered afterwards).
+            allowed = [self._int_ids[i] for i in allowed_ids if i in self._int_ids]
+            if not allowed:
+                return []
+            selector = self._faiss.IDSelectorBatch(self._np.asarray(allowed, dtype="int64"))
+            k = min(top_k, len(allowed))
+            scores, ids = self._index.search(self._matrix([query_vector]), k, params=self._faiss.SearchParameters(sel=selector))
         hits = [VectorHit(id=self._str_ids[int(i)], score=float(s)) for s, i in zip(scores[0], ids[0]) if i != -1]
         # FAISS breaks ties arbitrarily; re-sort stably by (score, insertion id) so ties
         # resolve like the in-memory store. Round to float32 precision first.

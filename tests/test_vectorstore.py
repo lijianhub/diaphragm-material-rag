@@ -27,6 +27,18 @@ def test_search_returns_nearest_vectors_by_cosine(store):
     assert hits[1].score == pytest.approx(0.8)
 
 
+def test_search_with_allowed_ids_ranks_only_allowed_chunks(store):
+    # The two best matches are not allowed: the filter must act inside the search,
+    # so top_k=2 still returns two allowed chunks instead of an emptier list.
+    store.add([_record("best"), _record("second"), _record("ok"), _record("far")], [[1, 0], [0.9, 0.1], [0.6, 0.8], [0, 1]])
+
+    hits = store.search([1, 0], top_k=2, allowed_ids={"ok", "far", "deleted-or-unknown"})
+
+    assert [hit.id for hit in hits] == ["ok", "far"]
+    assert store.search([1, 0], top_k=2, allowed_ids=set()) == []
+    assert [hit.id for hit in store.search([1, 0], top_k=1, allowed_ids=None)] == ["best"]  # None: no filter
+
+
 def test_search_uses_cosine_not_raw_dot_product(store):
     # By dot product the long vector [5, 0] would win; by angle [1, 1] is closer to the query.
     store.add([_record("long"), _record("close")], [[5, 0], [1, 1]])

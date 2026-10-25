@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import AbstractSet, Dict, List, Optional, Sequence
 
 from .base import ChunkRecord, VectorHit, VectorStore, l2_normalize
 
@@ -36,7 +36,7 @@ class InMemoryVectorStore(VectorStore):
             del self._vectors[chunk_id]
         return len(doomed)
 
-    def search(self, query_vector: Sequence[float], top_k: int) -> List[VectorHit]:
+    def search(self, query_vector: Sequence[float], top_k: int, allowed_ids: Optional[AbstractSet[str]] = None) -> List[VectorHit]:
         if not self._records:
             return []
         self._check_dim(query_vector)
@@ -44,6 +44,7 @@ class InMemoryVectorStore(VectorStore):
         hits = [
             VectorHit(id=chunk_id, score=sum(q * v for q, v in zip(query, vector)))
             for chunk_id, vector in self._vectors.items()
+            if allowed_ids is None or chunk_id in allowed_ids
         ]
         # Stable sort: equal scores keep insertion order, matching the FAISS store.
         hits.sort(key=lambda hit: hit.score, reverse=True)
