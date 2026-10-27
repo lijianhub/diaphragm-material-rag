@@ -76,7 +76,7 @@ The pipeline is ingestion → chunking → embedding → retrieval → generatio
 Many files exist only as zero-byte placeholders for the planned learning path. Check a file's contents before assuming it implements anything:
 
 - `src/`: `vectorstore/pgvector_store.py`
-- `scripts/` other than `index.py`, `query.py`, `serve.py`, `evaluate.py`, `evaluate_generation.py`, `compare_runs.py`, `agent.py` and `check_llm.py`; `experiments/02_*`–`09_*` and `11_*`; `notebooks/`; `docs/*.md` other than `01`–`06`, `08`–`11`, `13`–`21`, `architecture.md` and `claude-code-workflows.md`
+- `scripts/` other than `index.py`, `query.py`, `serve.py`, `evaluate.py`, `evaluate_generation.py`, `compare_runs.py`, `agent.py` and `check_llm.py`; `experiments/02_*`–`09_*` and `11_*`; `notebooks/`; `docs/*.md` other than `01`–`06`, `08`–`11`, `13`–`21`, `architecture.md`, `tech-stack.md` (keep its versions and status column current when a component changes) and `claude-code-workflows.md`
 
 Each `docs/NN-*.md` topic is meant to pair with an `experiments/NN_*` directory and a `src/` module. When you implement a stage, keep that numbering consistent.
 

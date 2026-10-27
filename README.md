@@ -53,6 +53,22 @@ The goal is a small but complete AI service that is **evaluated, tested and expl
 
 Every stage sits behind a small interface (vector store, embedder, reranker, LLM function), so a managed cloud backend can replace a local one without changing the pipeline. See [docs/architecture.md](docs/architecture.md) for components, failure handling and the planned service layers.
 
+## Tech stack
+
+| Layer | Choice |
+|---|---|
+| Retrieval | own BM25 (Lucene IDF, stemming) + dense vectors, weighted fusion or RRF; metadata filter inside retrieval; optional cross-encoder `ms-marco-MiniLM-L-6-v2` |
+| Embeddings | feature hashing (512-d, offline default), `all-MiniLM-L6-v2` (measured), Amazon Titan V2 (fakes only) |
+| Vector store | in-memory exact search (default), FAISS `IndexFlatIP`; PostgreSQL + pgvector planned |
+| LLM | OpenAI `gpt-5.4-mini` at low effort (all real measurements); Anthropic Claude Opus 5.5 supported (fakes only) |
+| Orchestration | plain Python, no LangChain or LlamaIndex |
+| Services | FastAPI + Uvicorn, Node.js BFF (Fastify 5, TypeScript), React 19 + Vite + Tailwind, nginx |
+| State | JSONL files, SQLite (agent runs, MLflow), the index as JSON or FAISS files |
+| Quality | own benchmarks (retrieval, generation, agent) with gates; pytest, Vitest, React Testing Library; MLflow |
+| Delivery | Docker Compose, GitHub Actions; AWS designed, not deployed |
+
+Versions, settings, status per component and what was deliberately not used: [docs/tech-stack.md](docs/tech-stack.md).
+
 ## Quick start
 
 ```bash
@@ -168,7 +184,7 @@ docs/            one document per topic (fundamentals, ingestion, parsing, chunk
 tests/           unit tests, fakes for model SDKs, in-code builders for PDF/DOCX/XLSX
 ```
 
-Topic documents: [RAG fundamentals](docs/01-rag-fundamentals.md) · [agentic RAG](docs/13-agentic-rag.md) · [ingestion](docs/02-document-ingestion.md) · [parsing](docs/03-document-parsing.md) · [chunking](docs/04-chunking.md) · [embeddings](docs/05-embeddings.md) · [vector database](docs/06-vector-database.md) · [reranking](docs/08-reranking.md) · [query transformation](docs/09-query-transformation.md) · [generation](docs/10-generation.md) · [evaluation](docs/11-rag-evaluation.md) · [HTTP service](docs/14-production-rag.md) · [backend-for-frontend and streaming](docs/16-backend-for-frontend.md) · [web app](docs/17-web-app.md) · [ops dashboard](docs/18-ops-dashboard.md) · [containers and CI](docs/19-containers-and-ci.md) · [AWS deployment (design)](docs/20-aws-deployment.md) · [enterprise features (design)](docs/21-enterprise-features.md) · [experiment tracking](docs/15-experiment-tracking.md) · [architecture](docs/architecture.md)
+Topic documents: [tech stack](docs/tech-stack.md) · [RAG fundamentals](docs/01-rag-fundamentals.md) · [agentic RAG](docs/13-agentic-rag.md) · [ingestion](docs/02-document-ingestion.md) · [parsing](docs/03-document-parsing.md) · [chunking](docs/04-chunking.md) · [embeddings](docs/05-embeddings.md) · [vector database](docs/06-vector-database.md) · [reranking](docs/08-reranking.md) · [query transformation](docs/09-query-transformation.md) · [generation](docs/10-generation.md) · [evaluation](docs/11-rag-evaluation.md) · [HTTP service](docs/14-production-rag.md) · [backend-for-frontend and streaming](docs/16-backend-for-frontend.md) · [web app](docs/17-web-app.md) · [ops dashboard](docs/18-ops-dashboard.md) · [containers and CI](docs/19-containers-and-ci.md) · [AWS deployment (design)](docs/20-aws-deployment.md) · [enterprise features (design)](docs/21-enterprise-features.md) · [experiment tracking](docs/15-experiment-tracking.md) · [architecture](docs/architecture.md)
 
 ## Known limitations
 
