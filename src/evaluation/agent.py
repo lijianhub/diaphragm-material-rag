@@ -26,7 +26,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 from .generation import facts_found, is_full_refusal, normalize
 
 ACTION_TOOL = "raise_nonconformance_report"
-CATEGORIES = ("answer", "lookup", "action", "no_action", "unanswerable", "injection", "rejection")
+CATEGORIES = ("answer", "lookup", "action", "no_action", "unanswerable", "injection", "rejection", "exhaustive")
 
 # Thresholds fixed before the first measurement, from what each failure costs.
 GATES = {
@@ -65,6 +65,10 @@ class AgentCase:
     action: Optional[Dict[str, Any]] = None  # {lot, root_cause: [[alternatives]], decision, reason}
     forbidden: List[str] = field(default_factory=list)
     extra_documents: List[Dict[str, str]] = field(default_factory=list)
+    # exhaustive cases: every document containing `term` must be named, and none of the others
+    term: Optional[str] = None
+    documents: List[str] = field(default_factory=list)
+    other_documents: List[str] = field(default_factory=list)
 
 
 def load_agent_cases(path: Union[str, Path]) -> List[AgentCase]:
@@ -90,7 +94,10 @@ class AgentCaseResult:
     stop_reason: Optional[str]
     answer: Optional[str]
     proposals: List[Dict[str, Any]]  # every attempt to call the action tool
+    documents_named: List[str]  # exhaustive cases: expected documents the answer names
+    wrong_documents_named: List[str]  # exhaustive cases: documents named that do not contain the term
     expected_lot: Optional[str]
+    expected_documents: int
     decisions: List[str]
     steps: int
     tool_calls: int
@@ -104,6 +111,14 @@ class AgentCaseResult:
 def _attempts(run: dict) -> List[dict]:
     """Every call of the action tool, whatever happened to it (pending, invalid, not run)."""
     return [t for t in run["trace"] if t["type"] == "tool" and t["tool"] == ACTION_TOOL]
+
+
+def names_document(answer: str, document: str) -> bool:
+    """Whether the answer names a file, with or without its extension, with underscores
+    or spaces: "alloy_overview.csv", "alloy_overview" and "alloy overview" all count."""
+    stem = document.rsplit(".", 1)[0]
+    text = normalize(answer).replace("_", " ")
+    return normalize(stem).replace("_", " ") in text
 
 
 def score_run(case: AgentCase, run: dict) -> AgentCaseResult:
@@ -145,6 +160,13 @@ def score_run(case: AgentCase, run: dict) -> AgentCaseResult:
         checks["facts"] = facts_found(answer, case.key_facts)
     if case.cited:
         checks["cited"] = bool(run.get("citations"))
+    named: List[str] = []
+    wrong: List[str] = []
+    if case.documents:
+        named = [d for d in case.documents if names_document(answer, d)]
+        wrong = [d for d in case.other_documents if names_document(answer, d)]
+        checks["all_documents"] = len(named) == len(case.documents)
+        checks["no_extra_documents"] = not wrong
     if case.refusal:
         checks["refused"] = is_full_refusal(answer) and not run.get("citations")
 
@@ -153,7 +175,9 @@ def score_run(case: AgentCase, run: dict) -> AgentCaseResult:
         id=case.id, category=case.category, question=case.question, correct=all(checks.values()), checks=checks,
         status=run["status"], stop_reason=run.get("stop_reason"), answer=answer or None,
         proposals=[{"status": t["status"], "arguments": t.get("arguments")} for t in attempts],
+        documents_named=named, wrong_documents_named=wrong,
         expected_lot=case.action["lot"] if case.action else None,
+        expected_documents=len(case.documents),
         decisions=[a["decision"] for a in run.get("approvals", [])],
         steps=run.get("steps", 0), tool_calls=run.get("tool_calls", 0),
         tokens_in=usage.get("input_tokens", 0), tokens_out=usage.get("output_tokens", 0),
@@ -186,6 +210,7 @@ class AgentReport:
         grounded = [r for r in with_action if r.checks["action_proposed"]]
         rejected = [r for r in results if "no_retry" in r.checks]
         injection = self.of("injection")
+        exhaustive = [r for r in results if r.expected_documents]
         times = [r.active_ms for r in results]
         return {
             "task_success": sum(r.correct for r in results) / len(results),
@@ -199,6 +224,12 @@ class AgentReport:
             "action_recall": sum(r.checks["action_proposed"] for r in with_action) / len(with_action) if with_action else float("nan"),
             "grounded_actions": sum(r.checks["grounded"] for r in grounded) / len(grounded) if grounded else float("nan"),
             "stopped_rate": sum(r.status != "completed" for r in results) / len(results),
+            # reported, not gated: how completely and how precisely documents were listed
+            "enumeration_recall": (sum(len(r.documents_named) for r in exhaustive) / sum(r.expected_documents for r in exhaustive))
+            if exhaustive else float("nan"),
+            "enumeration_precision": (sum(len(r.documents_named) for r in exhaustive)
+                                      / max(1, sum(len(r.documents_named) + len(r.wrong_documents_named) for r in exhaustive)))
+            if exhaustive else float("nan"),
             "mean_steps": mean(r.steps for r in results),
             "mean_tool_calls": mean(r.tool_calls for r in results),
             "tokens_in": float(sum(r.tokens_in for r in results)),

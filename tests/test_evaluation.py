@@ -262,8 +262,9 @@ def test_bundled_agent_cases_are_grounded_in_the_corpus():
     cases = load_agent_cases(REPO_ROOT / "evaluation" / "agent_cases.jsonl")
     corpus = " ".join(normalize(d.content) for d in load_documents(benchmark_corpus(REPO_ROOT / "data" / "raw")))
 
-    assert len({c.id for c in cases}) == len(cases) == 28
-    assert {c.category for c in cases} == {"answer", "lookup", "action", "no_action", "unanswerable", "injection", "rejection"}
+    assert len({c.id for c in cases}) == len(cases) == 33
+    assert {c.category for c in cases} == {"answer", "lookup", "action", "no_action", "unanswerable", "injection", "rejection", "exhaustive"}
+    files = benchmark_corpus(REPO_ROOT / "data" / "raw")
     for case in cases:
         text = corpus + " " + " ".join(normalize(d["content"]) for d in case.extra_documents)
         for group in case.key_facts + (case.action["root_cause"] if case.action else []):
@@ -274,6 +275,11 @@ def test_bundled_agent_cases_are_grounded_in_the_corpus():
             assert (case.category == "rejection") == (case.action["decision"] == "reject")
         if case.refusal:
             assert not case.key_facts and not case.action
+        if case.category == "exhaustive":
+            # the answer key is recomputed from the files: every file containing the term, and no other
+            having = sorted(f.name for f in files if case.term.lower() in f.read_text(encoding="utf-8").lower())
+            assert sorted(case.documents) == having, case.id
+            assert sorted(case.documents + case.other_documents) == sorted(f.name for f in files), case.id
 
 
 def _agent_run(trace, answer="Done.", status="completed", citations=(), approvals=(), invalid=()):
@@ -377,3 +383,20 @@ def test_evaluate_agent_runs_each_case_on_a_fresh_agent_and_answers_approvals(tm
     assert NcrStore(tmp_path / "n" / "ncr.jsonl").list() == []
     assert set(AGENT_GATES) <= set(report.metrics())
     assert report.gates()["grounded_actions"][2] is True and report.gates()["unrequested_actions"][2] is False
+
+
+def test_agent_scoring_of_exhaustive_lists_accepts_names_with_or_without_extensions():
+    from evaluation.agent import names_document
+
+    case = AgentCase("e", "exhaustive", "q", term="HAVAR", documents=["alloy_overview.csv", "diaphragm_material_notes.txt"],
+                     other_documents=["aging_procedure.md"])
+    complete = score_run(case, _agent_run([], answer="HAVAR appears in alloy_overview.csv and in diaphragm material notes."))
+    partial = score_run(case, _agent_run([], answer="Only alloy_overview mentions it."))
+    padded = score_run(case, _agent_run([], answer="alloy_overview.csv, diaphragm_material_notes.txt and aging_procedure.md"))
+
+    assert complete.correct and complete.documents_named == ["alloy_overview.csv", "diaphragm_material_notes.txt"]
+    assert not partial.checks["all_documents"] and partial.checks["no_extra_documents"]
+    assert padded.checks["all_documents"] and not padded.checks["no_extra_documents"] and padded.wrong_documents_named == ["aging_procedure.md"]
+    metrics = AgentReport([complete, partial, padded]).metrics()
+    assert metrics["enumeration_recall"] == pytest.approx(5 / 6) and metrics["enumeration_precision"] == pytest.approx(5 / 6)
+    assert not names_document("aging", "aging_procedure.md")  # a fragment is not a name
