@@ -84,7 +84,7 @@ LLM features built on top: grounded prompt `grounded-v2` with numbered sources a
 | Component | Detail | Status |
 |---|---|---|
 | State machine (own, `agent/`) | running → awaiting approval → completed / stopped / failed | Used, benchmarked ([13](13-agentic-rag.md)) |
-| Tools | `search_documents`, `lookup_alloy`, `raise_nonconformance_report` (side effect: human approval) | Used |
+| Tools | `search_documents` (ranked hybrid retrieval), `grep_documents` (exact text over the indexed chunks: complete lists, identifiers), `lookup_alloy`, `raise_nonconformance_report` (side effect: human approval) | Used; `grep_documents` not yet measured with a real model |
 | Run store | SQLite (standard library) with compare-and-set | Used |
 | Frameworks (LangGraph, LangChain agents) | — | Not used, by design |
 

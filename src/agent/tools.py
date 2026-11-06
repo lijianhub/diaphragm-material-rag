@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from generation.prompt import citation_label
+from retrieval.index import matches_filter
 
 MAX_RESULT_CHARS = 4000  # a tool result longer than this is cut, so one call cannot fill the context
 
@@ -101,9 +102,12 @@ def escape(text: str) -> str:
 # ---- read-only tools -----------------------------------------------------------------
 
 
-def search_tool(index, max_top_k: int = 5) -> Tool:
+def search_tool(index, max_top_k: int = 5, filter: Optional[Dict[str, Any]] = None) -> Tool:
+    """``filter`` is set by the server when the tools are built (e.g. the user's document
+    permissions); the model cannot pass or change it."""
+
     def run(args: Dict[str, Any], ctx: ToolContext) -> str:
-        results = index.search(args["query"], top_k=args.get("top_k", 3))
+        results = index.search(args["query"], top_k=args.get("top_k", 3), filter=filter)
         if not results:
             return "No passages found."
         sources = [{"label": citation_label(r), "source": str(r.source), "text": r.text} for r in results]
@@ -116,13 +120,91 @@ def search_tool(index, max_top_k: int = 5) -> Tool:
         name="search_documents",
         description=(
             "Search the engineering documents (diaphragm forming, Co-Cr-Ni-Mo alloys, heat treatment, inspection, "
-            "quality records). Returns passages with an id; cite a passage as [id] in the answer."
+            "quality records) for the passages that best answer a question, also when the wording differs. Returns the "
+            "best few passages, ranked, not every mention. Cite a passage as [id] in the answer."
         ),
         parameters={
             "type": "object",
             "properties": {
                 "query": {"type": "string", "minLength": 1, "maxLength": 300, "description": "What to look for, in plain words"},
                 "top_k": {"type": "integer", "minimum": 1, "maximum": max_top_k, "description": "Number of passages (default 3)"},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        func=run,
+    )
+
+
+GREP_MAX_DOCUMENTS = 20
+GREP_SNIPPETS_PER_DOCUMENT = 2
+GREP_CONTEXT_CHARS = 80
+
+
+def grep_tool(index, filter: Optional[Dict[str, Any]] = None) -> Tool:
+    """Exact-text search over the **indexed chunks**: every document containing a word,
+    phrase or identifier. What ranked retrieval cannot do: list *all* mentions.
+
+    Limits, each against a specific risk:
+    - only indexed chunks are searched, never the file system: no paths, no access to
+      files that were never indexed (.env, logs, keys);
+    - literal matching only (an escaped pattern, used for word boundaries at most): no
+      regular expressions, so no catastrophic backtracking;
+    - the server-side ``filter`` (document permissions) applies as in retrieval;
+    - at most 20 documents and 2 short snippets each, under the usual result cap.
+    """
+
+    def run(args: Dict[str, Any], ctx: ToolContext) -> str:
+        query = args["query"].strip()
+        if len(query) < 3:
+            raise ToolError("the search text must have at least 3 non-space characters")
+        flags = re.IGNORECASE
+        pattern = re.compile((r"\b" + re.escape(query) + r"\b") if args.get("whole_word") else re.escape(query), flags)
+        documents: Dict[str, Dict[str, Any]] = {}
+        for record in index.store.records():
+            if filter is not None and not matches_filter(record, filter):
+                continue
+            for match in pattern.finditer(record.text):
+                doc = documents.setdefault(record.source, {"positions": set(), "snippets": [], "chunks": []})
+                # Chunks overlap: the same occurrence can sit in two chunks. Count it once.
+                position = (record.metadata.get("section"), record.start + match.start())
+                if position in doc["positions"]:
+                    continue
+                doc["positions"].add(position)
+                if len(doc["snippets"]) < GREP_SNIPPETS_PER_DOCUMENT:
+                    start, end = max(0, match.start() - GREP_CONTEXT_CHARS), min(len(record.text), match.end() + GREP_CONTEXT_CHARS)
+                    snippet = ("…" if start else "") + record.text[start:end].replace("\n", " ") + ("…" if end < len(record.text) else "")
+                    doc["snippets"].append(snippet)
+                    if record not in doc["chunks"]:
+                        doc["chunks"].append(record)
+        if not documents:
+            return f"No exact matches for {escape(query)!r} in the indexed documents."
+        ordered = sorted(documents.items(), key=lambda item: (-len(item[1]["positions"]), item[0]))
+        total = sum(len(d["positions"]) for d in documents.values())
+        lines = [f"Exact matches for {escape(query)!r}: {len(documents)} documents, {total} matches."]
+        for source, doc in ordered[:GREP_MAX_DOCUMENTS]:
+            chunk = doc["chunks"][0]
+            number = ctx.add_sources([{"label": citation_label(chunk), "source": str(chunk.source), "text": chunk.text}])[0]
+            text = " | ".join(escape(s) for s in doc["snippets"])
+            lines.append(f'<match id="{number}" document="{escape(str(source))}" matches="{len(doc["positions"])}">{text}</match>')
+        hidden = len(ordered) - GREP_MAX_DOCUMENTS
+        if hidden > 0:
+            lines.append(f"{hidden} more documents not shown; use a more specific text.")
+        return "\n".join(lines)
+
+    return Tool(
+        name="grep_documents",
+        description=(
+            "Find EVERY indexed document that contains an exact word, phrase or identifier (for example a lot number or "
+            "an alloy name), case-insensitive. Use it for questions that ask for all documents or all mentions, or for "
+            "exact strings; use search_documents for explanations and differently worded questions. Literal text only, "
+            "no wildcards or regular expressions. Returns documents with match counts and short snippets; cite as [id]."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "minLength": 3, "maxLength": 100, "description": "The exact text to find"},
+                "whole_word": {"type": "boolean", "description": "Match whole words only (default false)"},
             },
             "required": ["query"],
             "additionalProperties": False,
@@ -228,8 +310,10 @@ def ncr_tool(store: NcrStore) -> Tool:
     )
 
 
-def default_tools(index, alloy_table: Union[str, Path, None], ncr_store: NcrStore) -> List[Tool]:
-    tools = [search_tool(index)]
+def default_tools(index, alloy_table: Union[str, Path, None], ncr_store: NcrStore, filter: Optional[Dict[str, Any]] = None) -> List[Tool]:
+    """``filter`` restricts both text tools to the documents the caller may see; it is
+    fixed here, by the server, and is not a tool argument."""
+    tools = [search_tool(index, filter=filter), grep_tool(index, filter=filter)]
     if alloy_table and Path(alloy_table).exists():
         tools.append(alloy_tool(alloy_table))
     tools.append(ncr_tool(ncr_store))
@@ -237,4 +321,4 @@ def default_tools(index, alloy_table: Union[str, Path, None], ncr_store: NcrStor
 
 
 __all__ = ["MAX_RESULT_CHARS", "NcrStore", "Tool", "ToolContext", "ToolError", "alloy_tool", "default_tools", "escape",
-           "ncr_tool", "search_tool", "validate"]
+           "grep_tool", "ncr_tool", "search_tool", "validate"]

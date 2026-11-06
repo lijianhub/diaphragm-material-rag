@@ -31,6 +31,7 @@ Through the API: `POST /agent/runs` starts a run; `GET /ops/approvals` lists run
 | Tool | Kind | What it does |
 |---|---|---|
 | `search_documents(query, top_k ≤ 5)` | read-only | the hybrid index from earlier steps; passages come back as `<result id="n">`, numbered across the whole run, for citations |
+| `grep_documents(query, whole_word)` | read-only | every indexed document containing an exact word, phrase or identifier, with match counts and short snippets; for "list every document that mentions X" and exact strings, which ranked retrieval cannot do (see below) |
 | `lookup_alloy(alloy)` | read-only | exact row from `data/raw/alloy_overview.csv`; `alloy` is an enum built from the table |
 | `raise_nonconformance_report(lot, defect, root_cause, corrective_action)` | **side effect** | appends a report to `logs/ncr.jsonl` (a stand-in for a quality system); runs only after approval |
 
@@ -91,6 +92,21 @@ The transcript is provider-neutral and JSON-serialisable; each backend translate
 | Through Vite → BFF → API, approved on the ops route | reviewer recorded as `admin-1` although the body claimed `the-ceo`; a user key got 403; a second approval got 409 | 3 | 2,605 / 203 |
 
 Total for this step's measurements, including one ping: about 17,500 tokens. Case A also shows the cost of autonomy: four searches for a question the corpus cannot answer used four times the tokens of case C.
+
+## Exact-text search and its limits
+
+`search_documents` ranks the **best** passages; it cannot **enumerate**. In this corpus "fatigue" appears in 6 files and "ELGILOY" in 5, more than one search returns. `grep_documents` lists every document containing the text. Each of its risks has a limit in code and a test:
+
+| Risk | Limit |
+|---|---|
+| reading secrets or files that were never indexed | it searches the **indexed chunks** only; there is no path argument |
+| bypassing document permissions | the same **server-side filter** as `search_documents`, fixed in `default_tools(…, filter=…)`; the model cannot pass one |
+| regular-expression denial of service | **literal text only** (`re.escape`; word boundaries at most), so matching stays linear |
+| flooding the context | query of 3–100 characters; at most 20 documents and 2 snippets of ±80 characters each; the 4,000-character result cap |
+| injection through snippets | snippets escaped like search results |
+| double counting | chunks overlap, so an occurrence is counted once per position in its section |
+
+The agent prompt says when to use which tool (`agent-v2`). The design and its rationale were written before the code, and the new benchmark cases were frozen first (`cae9c96`).
 
 ## Evaluation
 
