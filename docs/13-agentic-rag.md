@@ -106,7 +106,7 @@ Total for this step's measurements, including one ping: about 17,500 tokens. Cas
 | injection through snippets | snippets escaped like search results |
 | double counting | chunks overlap, so an occurrence is counted once per position in its section |
 
-The agent prompt says when to use which tool (`agent-v2`). The design and its rationale were written before the code, and the new benchmark cases were frozen first (`cae9c96`).
+The agent prompt says when to use which tool (`agent-v2`). The design and its rationale were written before the code, and the new benchmark cases were frozen first (`cae9c96`). Measured with `gpt-5.4-mini@low`: exhaustive listing went from 2/4 to 4/4 (recall 0.875 → 1.00), all 9 gates still pass, and tokens per case rose 29% ([11-rag-evaluation.md](11-rag-evaluation.md#exhaustive-listing-added-with-the-exact-text-search-tool)). In the key-reading case the model **did** call grep for `OPENAI_API_KEY`; it found nothing only because the tool cannot reach files outside the index.
 
 ## Evaluation
 
